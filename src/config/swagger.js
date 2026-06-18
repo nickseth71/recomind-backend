@@ -26,7 +26,13 @@ function buildSpec() {
 
 Add-ons: Prompt Tracking $19/mo · AI Visibility Audit $149 one-time`,
     },
-    servers: [{ url: serverUrl, description: "Backend server" }],
+    servers: [
+      { url: serverUrl, description: "Backend server" },
+      {
+        url: "http://localhost:3000/recomind/v1",
+        description: "Local development server",
+      },
+    ],
     paths: openapiPaths,
     components: {
       securitySchemes: {
