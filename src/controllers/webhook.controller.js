@@ -2,8 +2,8 @@ import Store from "../models/store.model.js"
 import Product from "../models/product.model.js"
 import AuditLog from "../models/auditlog.model.js"
 import * as shopifyService from "../services/shopify.service.js"
-import * as productSyncService from "../services/productSync.service.js"
-import { enqueueAnalysis } from "../jobs/analysisQueue.js"
+import * as productSyncService from "../services/productsync.service.js"
+import { enqueueAnalysis } from "../jobs/analysisqueue.js"
 import logger from "../config/logger.js"
 
 function verifyShopifyWebhook(req, res, next) {
