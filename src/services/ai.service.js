@@ -1,0 +1,799 @@
+import OpenAI from "openai"
+import logger from "../config/logger.js"
+import Store from "../models/store.model.js"
+import { getPromptLimits } from "../config/plans.js"
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+const MODEL = process.env.OPENAI_MODEL || "gpt-4o"
+const MAX_TOKENS = parseInt(process.env.OPENAI_MAX_TOKENS) || 4000
+
+// ─── Scoring weights ─────────────────────────────────────────
+export const SCORE_WEIGHTS = {
+  productClarity: 20, // Does AI understand what this product IS?
+  audienceSignals: 15, // Who is this for? Is that clear?
+  useCaseDepth: 20, // What specific problems does it solve?
+  trustAndCredibility: 15, // Reviews, certifications, proof points
+  faqAndObjections: 15, // Does content handle real buyer objections?
+  promptReadiness: 15, // Would an AI confidently recommend this product?
+}
+
+// ─────────────────────────────────────────────────────────────
+// STAGE 1 — PRODUCT INTERPRETER
+// Deeply understand what the product actually IS before scoring it.
+// This runs first and feeds all downstream stages.
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Interpret the product deeply — infer its true identity, audience,
+ * use cases, purchase triggers, and semantic attributes from ALL available signals.
+ * This is the foundation layer. Everything else is built on this.
+ */
+async function interpretProduct(product) {
+  const systemPrompt = `You are a deep product intelligence engine for e-commerce. Your job is NOT to restate product information — it is to INTERPRET what a product truly is, who actually buys it, why they buy it, what objections they have, and what attributes matter for AI recommendation engines.
+
+You must reason like a senior product analyst who has seen thousands of products. Use all available signals — not just the description, but also tags, variants, vendor, collections, pricing, and any review signals — to build a rich semantic understanding of the product.
+
+If the product description is weak or sparse, DO NOT give up. Use the product title, tags, variants, and vendor to infer the missing context. Your job is to work with whatever signals exist and extract maximum intelligence.
+
+Respond ONLY with a valid JSON object. No markdown, no code fences.`
+
+  // Build a rich signal map for the interpreter
+  const reviewSignals = buildReviewSignals(product)
+  const variantSignals = buildVariantSignals(product)
+  const tagSignals = (product.tags || []).join(", ") || "None"
+  const collectionSignals =
+    (product.collections || []).map((c) => c.title || c).join(", ") || "None"
+  const pricingContext = buildPricingContext(product)
+
+  const userPrompt = `Interpret this product deeply. Do not just describe it — UNDERSTAND it.
+
+═══ RAW PRODUCT DATA ═══
+Title: ${product.title}
+Vendor: ${product.vendor || "Not specified"}
+Product Type: ${product.productType || "Not specified"}
+Price Range: ${pricingContext}
+Tags: ${tagSignals}
+Collections: ${collectionSignals}
+Description (raw):
+${(product.description || "").replace(/<[^>]*>/g, "").slice(0, 1500) || "Not provided"}
+
+${variantSignals ? `Variants / Options:\n${variantSignals}` : ""}
+${reviewSignals ? `Review Signals (extracted patterns):\n${reviewSignals}` : ""}
+${product.existingFaqs?.length ? `Existing FAQs on product:\n${product.existingFaqs.map((f) => `Q: ${f.question}\nA: ${f.answer}`).join("\n")}` : ""}
+
+═══ YOUR TASK ═══
+Build a complete product interpretation. Think deeply. Use inference where data is missing.
+
+Return this exact JSON structure:
+{
+  "productIdentity": {
+    "coreProduct": "What this product actually is in plain English — 1 sentence",
+    "productCategory": "Specific category (e.g. 'Whey Protein Isolate', 'Running Shoe', 'Anti-aging Serum')",
+    "subCategory": "Niche subcategory if applicable",
+    "productFormFactor": "How it exists physically (powder, liquid, device, garment, etc.)",
+    "keyIngredients": ["active ingredients or materials that matter — infer from title/tags if needed"],
+    "brandPositioning": "How this brand/vendor is positioned (budget, mid-range, premium, luxury)",
+    "confidence": "HIGH | MEDIUM | LOW — how confident you are in this interpretation"
+  },
+  "audienceProfile": {
+    "primaryBuyer": "Specific persona, not vague — e.g. 'Gym-going 25–35 year old male focused on muscle building'",
+    "secondaryBuyers": ["Other buyer types who might purchase this"],
+    "buyerMotivation": "The core emotional/functional reason they buy",
+    "experienceLevel": "Beginner | Intermediate | Advanced | Mixed",
+    "lifestyleContext": ["Lifestyle signals this buyer likely has — e.g. 'Goes to gym 4+ times/week'"],
+    "purchaseTrigger": "The specific moment or event that makes someone buy this — e.g. 'Started new workout routine'",
+    "buyerObjections": ["Real doubts or hesitations this specific buyer type has before purchasing"],
+    "pricesSensitivity": "LOW | MEDIUM | HIGH"
+  },
+  "useCaseMap": {
+    "primaryUseCase": "The #1 reason someone buys this — very specific",
+    "secondaryUseCases": ["Other real use cases"],
+    "timeOfUse": "When they use it (morning, pre-workout, daily skincare routine, etc.)",
+    "frequencyOfUse": "How often (daily, weekly, occasionally)",
+    "situationalContext": ["Specific situations where this product gets used"],
+    "pairedProducts": ["Products this is commonly used with — relevant for bundles/suggestions"]
+  },
+  "semanticAttributes": {
+    "inferredAttributes": [
+      {
+        "attribute": "attribute name e.g. 'low bloating'",
+        "inferredFrom": "what signal led to this inference (tag, review phrase, ingredient, etc.)",
+        "confidence": "HIGH | MEDIUM | LOW",
+        "aiImportance": "Why this attribute matters for AI recommendation engines"
+      }
+    ],
+    "explicitAttributes": ["Attributes directly stated in the product data"],
+    "missingCriticalAttributes": ["Attributes that buyers DEFINITELY care about for this product type but are completely absent from product data"]
+  },
+  "competitiveContext": {
+    "directCompetitors": ["Specific competing products/brands an AI would compare this against"],
+    "differentiators": ["What makes this product stand out — infer if not stated"],
+    "weaknesses": ["Where this product likely loses to competitors in AI recommendations"],
+    "marketPosition": "How this product would rank among similar AI-recommended products right now"
+  },
+  "aiReadinessGaps": {
+    "criticalGaps": ["Gaps that would cause AI engines to NOT recommend this product"],
+    "moderateGaps": ["Gaps that reduce recommendation likelihood"],
+    "minorGaps": ["Nice-to-have improvements"]
+  }
+}`
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: MODEL,
+      max_tokens: 2000,
+      temperature: 0.2,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    })
+
+    const raw = completion.choices[0].message.content.trim()
+    return safeParseJSON(raw)
+  } catch (err) {
+    logger.error("Product interpretation failed:", err.message)
+    throw new Error(`Product interpretation failed: ${err.message}`)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// STAGE 2 — AI READINESS ANALYSER
+// Score the product based on interpreted identity — not raw text.
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Score and analyse AI readiness based on BOTH the raw product data
+ * AND the deep interpretation from Stage 1. This produces scores,
+ * specific recommendations, and optimization content.
+ */
+async function analyseProduct(product, storeId) {
+  // Step 1: Interpret the product first
+  logger.info(`[RecoMind] Interpreting product: ${product.title}`)
+  const interpretation = await interpretProduct(product)
+
+  // Step 2: Generate smart prompts based on interpretation
+  logger.info(`[RecoMind] Generating smart prompts for: ${product.title}`)
+  const smartPrompts = await generateSmartPrompts(
+    product,
+    interpretation,
+    storeId,
+    true,
+  )
+
+  // Step 3: Deep AI readiness analysis with full context
+  logger.info(`[RecoMind] Running AI readiness analysis for: ${product.title}`)
+
+  const systemPrompt = `You are an AI commerce visibility expert with deep knowledge of how AI recommendation engines (ChatGPT Shopping, Perplexity, Gemini, Google AI Overviews) evaluate and recommend products.
+
+You have been given:
+1. The raw product data
+2. A deep product interpretation (what the product truly is, who buys it, why they buy it)
+
+Your job is to score the product's AI readiness and generate specific, actionable improvements. Be surgical — every recommendation should be grounded in the product's specific identity, audience, and use cases.
+
+Do NOT give generic advice. Every suggestion must be specific to THIS product and THIS audience.
+
+Respond ONLY with valid JSON. No markdown, no code fences.`
+
+  const existingFaqs = product.existingFaqs || []
+  const faqContext =
+    existingFaqs.length > 0
+      ? `EXISTING FAQs (${existingFaqs.length} found from ${product.faqSource || "unknown"} source):\n${existingFaqs.map((f, i) => `${i + 1}. Q: ${f.question}\n   A: ${f.answer}`).join("\n")}\n\nAnalyse these FAQs against the buyer's real objections and use cases. Improve weak answers. Add FAQs for objections not covered.`
+      : `NO EXISTING FAQs. Generate FAQs that specifically address: (1) the buyer's core objections, (2) use case questions, (3) comparison questions vs direct competitors.`
+
+  const userPrompt = `Analyse this product for AI recommendation readiness.
+
+═══ PRODUCT DATA ═══
+Title: ${product.title}
+Description: ${(product.description || "").replace(/<[^>]*>/g, "").slice(0, 1200) || "Not provided"}
+Tags: ${(product.tags || []).join(", ") || "None"}
+Vendor: ${product.vendor || "Not specified"}
+Type: ${product.productType || "Not specified"}
+${buildPricingContext(product) ? `Price: ${buildPricingContext(product)}` : ""}
+
+═══ PRODUCT INTERPRETATION (Stage 1 output) ═══
+Product Identity: ${interpretation.productIdentity?.coreProduct}
+Category: ${interpretation.productIdentity?.productCategory}
+Primary Buyer: ${interpretation.audienceProfile?.primaryBuyer}
+Buyer Motivation: ${interpretation.audienceProfile?.buyerMotivation}
+Primary Use Case: ${interpretation.useCaseMap?.primaryUseCase}
+Purchase Trigger: ${interpretation.audienceProfile?.purchaseTrigger}
+Buyer Objections: ${(interpretation.audienceProfile?.buyerObjections || []).join("; ")}
+Inferred Attributes: ${(interpretation.semanticAttributes?.inferredAttributes || []).map((a) => `${a.attribute} (inferred from: ${a.inferredFrom})`).join(", ")}
+Missing Critical Attributes: ${(interpretation.semanticAttributes?.missingCriticalAttributes || []).join(", ")}
+Critical AI Gaps: ${(interpretation.aiReadinessGaps?.criticalGaps || []).join(", ")}
+Direct Competitors: ${(interpretation.competitiveContext?.directCompetitors || []).join(", ")}
+
+═══ FAQ CONTEXT ═══
+${faqContext}
+
+═══ SMART PROMPTS (generated for this product) ═══
+${(smartPrompts.prompts || [])
+  .slice(0, 8)
+  .map((p, i) => `${i + 1}. "${p.prompt}" (intent: ${p.intent})`)
+  .join("\n")}
+
+Return this exact JSON:
+{
+  "bestFor": ["specific use-case phrases grounded in the actual buyer persona — e.g. 'post-workout muscle recovery within 30 minutes', NOT 'people who want protein'"],
+  "intentKeywords": ["conversational search phrases this specific buyer would type or ask"],
+  "intentClusters": ["8–12 full natural language shopping queries this product should win — make them realistic and specific to the audience and use case"],
+  "comparisonOpportunities": ${JSON.stringify(interpretation.competitiveContext?.directCompetitors || []).slice(0, 200)},
+  "missingSignals": ["specific signals absent from the product that AI engines need for this product category — be precise, not generic"],
+  "trustSignals": ["trust claims present OR needed — specific to this product type and buyer"],
+  "existingFaqs": ${JSON.stringify(existingFaqs)},
+  "faq": [
+    {
+      "question": "A real buyer question for THIS product — grounded in the buyer objections and use case map",
+      "answer": "A specific, informative answer — not marketing fluff"
+    }
+  ],
+  "faqAnalysis": {
+    "hasExistingFaqs": ${existingFaqs.length > 0},
+    "existingCount": ${existingFaqs.length},
+    "suggestedCount": <number>,
+    "needsImprovement": <boolean>,
+    "action": "none" | "create" | "update" | "review",
+    "recommendedStrategy": "inline" | "metafield" | "skip",
+    "objectionsCovered": ["buyer objections that are actually addressed by current FAQs"],
+    "objectionsUncovered": ["buyer objections that have NO FAQ coverage — pull from buyer objections above"]
+  },
+  "optimizedTitle": "Improved title with semantic clarity for AI engines — include key attributes that matter for this product type",
+  "optimizedDescription": "Improved HTML description. Must: (1) open with the primary use case, (2) address buyer motivation, (3) list specific attributes with semantic clarity, (4) handle top 2 objections inline, (5) include verifiable trust signals. Do NOT include FAQ section here.",
+  "scoreBreakdown": {
+    "productClarity": <0–20, how clearly does the product communicate what it IS to AI engines>,
+    "audienceSignals": <0–15, how clearly does the product signal WHO it's for>,
+    "useCaseDepth": <0–20, how well does the product describe WHAT PROBLEMS it solves and HOW>,
+    "trustAndCredibility": <0–15, certifications, reviews, proof points, brand credibility>,
+    "faqAndObjections": <0–15, do FAQs/content handle real buyer objections for this product type>,
+    "promptReadiness": <0–15, would an AI engine confidently recommend this for the smart prompts above>
+  },
+  "engineCoverage": {
+    "chatgpt": <0–100>,
+    "perplexity": <0–100>,
+    "gemini": <0–100>,
+    "aiOverview": <0–100>
+  },
+  "prioritizedFixes": [
+    {
+      "priority": 1,
+      "fix": "Specific action",
+      "impact": "HIGH | MEDIUM | LOW",
+      "reason": "Why this fix matters for AI recommendation for THIS product",
+      "effort": "HIGH | MEDIUM | LOW"
+    }
+  ],
+  "reasoning": "1–2 sentences explaining this product's current AI visibility situation — be specific about what's working and what's failing"
+}`
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: MODEL,
+      max_tokens: MAX_TOKENS,
+      temperature: 0.2,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    })
+
+    const raw = completion.choices[0].message.content.trim()
+    const parsed = safeParseJSON(raw)
+
+    const breakdown = parsed.scoreBreakdown || {}
+    const totalScore = Object.values(breakdown).reduce(
+      (a, b) => a + (Number(b) || 0),
+      0,
+    )
+
+    return {
+      ...parsed,
+      interpretation, // Full Stage 1 output attached
+      smartPrompts, // Smart prompts attached
+      score: Math.min(100, Math.max(0, Math.round(totalScore))),
+      rawAiResponse: raw,
+    }
+  } catch (err) {
+    logger.error("AI product analysis failed:", err.message)
+    throw new Error(`AI analysis failed: ${err.message}`)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// STAGE 3 — SMART PROMPT GENERATOR
+// Generate product-specific, buyer-persona-grounded prompts.
+// Not generic — these must be exactly what this audience asks.
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Generate smart, product-specific AI shopping prompts.
+ * Grounded in the product interpretation — not generic.
+ */
+async function generateSmartPrompts(
+  product,
+  interpretation,
+  storeId,
+  autoGenerate = false,
+) {
+  const store = await Store.findById(storeId)
+
+  const limits = getPromptLimits(store.plan, store.addons || {})
+  const autoLimit = limits.promptsPerProduct
+  const manualLimit = limits.manualPromptsPerProduct
+  const plan = store.plan
+
+  const promptLimit = autoGenerate ? autoLimit : manualLimit
+  logger.info(
+    `[RecoMind] Smart prompt limit:, ${promptLimit}, for store plan:, ${plan}`,
+  )
+
+  const systemPrompt = `You are an AI shopping behavior analyst who specialises in understanding how real consumers search for and discover products using AI assistants like ChatGPT, Perplexity, and Gemini.
+
+Your job is to generate the EXACT natural language queries that the specific buyer persona for this product would actually type or speak to an AI shopping assistant.
+
+These are NOT keyword lists. These are full conversational queries — real questions real people ask.
+
+Rules:
+- Every prompt must be grounded in the specific buyer persona and use case
+- Include prompts at different stages: awareness, comparison, decision
+- Include problem-first prompts (buyer describes their problem, not the product)
+- Include attribute-specific prompts based on inferred semantic attributes
+- Include comparison prompts against real competitors
+- Include negative-filter prompts (e.g. "protein without bloating")
+
+Respond ONLY with valid JSON. No markdown.`
+
+  const identity = interpretation?.productIdentity || {}
+  const audience = interpretation?.audienceProfile || {}
+  const useCases = interpretation?.useCaseMap || {}
+  const semantics = interpretation?.semanticAttributes || {}
+  const competitors = interpretation?.competitiveContext || {}
+
+  const userPrompt = `Generate smart AI shopping prompts for this specific product.
+
+═══ PRODUCT INTERPRETATION ═══
+Product: ${identity.coreProduct || product.title}
+Category: ${identity.productCategory || "Unknown"}
+Primary Buyer: ${audience.primaryBuyer || "Unknown"}
+Buyer Motivation: ${audience.buyerMotivation || "Unknown"}
+Buyer Objections: ${(audience.buyerObjections || []).join("; ")}
+Purchase Trigger: ${audience.purchaseTrigger || "Unknown"}
+Experience Level: ${audience.experienceLevel || "Unknown"}
+Primary Use Case: ${useCases.primaryUseCase || "Unknown"}
+Time of Use: ${useCases.timeOfUse || "Unknown"}
+Lifestyle Context: ${(useCases.situationalContext || []).join(", ")}
+Inferred Attributes: ${(semantics.inferredAttributes || []).map((a) => a.attribute).join(", ")}
+Missing Critical Attributes: ${(semantics.missingCriticalAttributes || []).join(", ")}
+Direct Competitors: ${(competitors.directCompetitors || []).join(", ")}
+Price Sensitivity: ${audience.pricesSensitivity || "Unknown"}
+
+Generate exactly ${promptLimit} smart prompts across these categories:
+
+Return JSON:
+{
+  "prompts": [
+    {
+      "prompt": "full natural language query",
+      "intent": "what the buyer wants to achieve",
+      "stage": "awareness | comparison | decision",
+      "promptType": "problem-first | attribute-specific | comparison | negative-filter | use-case | ingredient | budget | beginner | advanced",
+      "targetedAttribute": "which product attribute this prompt would test for",
+      "winProbability": "HIGH | MEDIUM | LOW — can this product currently win this prompt?"
+    }
+  ],
+  "promptClusters": [
+    {
+      "clusterName": "e.g. 'Digestive Sensitivity Prompts'",
+      "rationale": "Why this cluster matters for this specific buyer",
+      "prompts": ["list of 3–4 prompts in this cluster"]
+    }
+  ],
+  "highValuePrompts": ["Top prompts the merchant should focus on winning first — highest traffic + most winnable"],
+  "hardToWinPrompts": ["Prompts where strong competitors dominate — merchant needs more work to compete"]
+}`
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: MODEL,
+      max_tokens: 2000,
+      temperature: 0.3,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    })
+
+    const raw = completion.choices[0].message.content.trim()
+    return safeParseJSON(raw)
+  } catch (err) {
+    logger.error("Smart prompt generation failed:", err.message)
+    throw new Error(`Smart prompt generation failed: ${err.message}`)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// PROMPT ENGINE — Simulate & Score
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Simulate how an AI engine would respond to a specific shopping prompt.
+ * Now uses product interpretation for deeper, more accurate scoring.
+ */
+async function simulatePromptForProduct(prompt, product, existingAnalysis) {
+  const systemPrompt = `You are an AI shopping recommendation engine simulator. You know exactly how ChatGPT, Perplexity, and Gemini evaluate products for shopping queries.
+
+You have been given a product with its deep interpretation. Evaluate precisely — not generically — whether this product would be recommended for the given shopping prompt.
+
+Be brutally honest. If the product is missing signals that would get it recommended, say so specifically.
+
+Respond ONLY with valid JSON.`
+
+  const interpretation = existingAnalysis?.interpretation || {}
+  const identity = interpretation.productIdentity || {}
+  const audience = interpretation.audienceProfile || {}
+
+  const userPrompt = `Evaluate if this product would be recommended for this shopping query:
+
+QUERY: "${prompt}"
+
+PRODUCT:
+- Title: ${product.title}
+- Core Identity: ${identity.coreProduct || "Not interpreted yet"}
+- Target Buyer: ${audience.primaryBuyer || "Unknown"}
+- Buyer Motivation: ${audience.buyerMotivation || "Unknown"}
+- Description: ${(product.description || "").replace(/<[^>]*>/g, "").slice(0, 600)}
+- Tags: ${(product.tags || []).join(", ")}
+- Best For: ${(existingAnalysis?.bestFor || []).join(", ") || "Not analysed yet"}
+- Intent Keywords: ${(existingAnalysis?.intentKeywords || []).join(", ") || "Not analysed yet"}
+- Inferred Attributes: ${(interpretation.semanticAttributes?.inferredAttributes || []).map((a) => a.attribute).join(", ") || "None"}
+
+Return JSON:
+{
+  "recommendationScore": <0–100>,
+  "likelihood": "LOW | MED | HIGH",
+  "buyerIntent": "what the buyer actually wants from this query",
+  "expectedAttributes": ["what a winning product must have for this query"],
+  "matchedAttributes": ["attributes this product HAS that match the query"],
+  "missingSignals": ["specific signals this product lacks to win this query"],
+  "rankingFactors": ["what would concretely help this product rank higher for this query"],
+  "competitorStrength": "WEAK | MODERATE | STRONG",
+  "competitorDominating": ["brands that likely dominate this query and why"],
+  "semanticGaps": ["specific semantic gaps between this query and this product's current content"],
+  "recommendations": ["3–5 SPECIFIC actionable fixes — not generic, grounded in this product's identity"],
+  "reasoning": "1–2 sentence verdict — specific and honest"
+}`
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: MODEL,
+      max_tokens: 1200,
+      temperature: 0.2,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    })
+
+    const raw = completion.choices[0].message.content.trim()
+    return { ...safeParseJSON(raw), rawAiResponse: raw }
+  } catch (err) {
+    logger.error("AI prompt simulation failed:", err.message)
+    throw new Error(`AI simulation failed: ${err.message}`)
+  }
+}
+
+/**
+ * Analyse a prompt query in isolation (Prompt Intelligence Engine).
+ */
+async function analysePromptIntelligence(prompt, storeProducts) {
+  const systemPrompt = `You are a conversational commerce intelligence engine. Analyse shopping prompts and determine what products and attributes win AI recommendations.
+
+Respond ONLY with valid JSON.`
+
+  const productTitles = storeProducts
+    .slice(0, 20)
+    .map((p) => p.title)
+    .join(", ")
+
+  const userPrompt = `Analyse this shopping query for AI recommendation intelligence:
+
+QUERY: "${prompt}"
+MERCHANT'S PRODUCTS (sample): ${productTitles || "Not provided"}
+
+Return JSON:
+{
+  "buyerIntent": "what the buyer is trying to achieve",
+  "queryType": "ingredient-specific | budget-conscious | use-case-driven | comparison | problem-solution | brand-specific | other",
+  "expectedProductAttributes": ["specific attributes a winning product must have"],
+  "semanticRequirements": ["semantic signals an AI engine looks for in this query"],
+  "rankingCompetitiveness": "LOW | MEDIUM | HIGH",
+  "dominantCategories": ["product categories that dominate this query"],
+  "merchantCanWin": <true|false>,
+  "winStrategy": "how the merchant can position products to win this query",
+  "promptVariants": ["3–5 related queries the merchant should also optimise for"],
+  "contentGaps": ["content/signal gaps common across most products for this query"]
+}`
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: MODEL,
+      max_tokens: 1000,
+      temperature: 0.3,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    })
+
+    const raw = completion.choices[0].message.content.trim()
+    return safeParseJSON(raw)
+  } catch (err) {
+    logger.error("Prompt intelligence analysis failed:", err.message)
+    throw new Error(`Prompt intelligence failed: ${err.message}`)
+  }
+}
+
+/**
+ * Score how visible a product is for a specific AI shopping prompt.
+ * Uses the product interpretation for much deeper, accurate scoring.
+ */
+async function scorePromptVisibility(prompt, product, existingAnalysis) {
+  const systemPrompt = `You are an AI commerce visibility analyst. You score how well a product covers the buyer intent behind a shopping prompt.
+
+You have the product's deep interpretation. Use it. Don't score based on text matching — score based on intent coverage and semantic alignment.
+
+Respond ONLY with valid JSON.`
+
+  const interpretation = existingAnalysis?.interpretation || {}
+
+  const userPrompt = `Score product visibility for this AI shopping prompt:
+
+PROMPT: "${prompt}"
+
+PRODUCT:
+- Title: ${product.title}
+- Core Identity: ${interpretation.productIdentity?.coreProduct || product.title}
+- Target Buyer: ${interpretation.audienceProfile?.primaryBuyer || "Unknown"}
+- Buyer Objections: ${(interpretation.audienceProfile?.buyerObjections || []).join("; ")}
+- Description: ${(product.description || "").replace(/<[^>]*>/g, "").slice(0, 600)}
+- Tags: ${(product.tags || []).join(", ")}
+- Inferred Attributes: ${(interpretation.semanticAttributes?.inferredAttributes || []).map((a) => `${a.attribute} (confidence: ${a.confidence})`).join(", ") || "None"}
+- Missing Critical Attributes: ${(interpretation.semanticAttributes?.missingCriticalAttributes || []).join(", ") || "None"}
+- Existing FAQs: ${(existingAnalysis?.faq || product.existingFaqs || []).map((f) => f.question).join("; ") || "None"}
+
+Return JSON:
+{
+  "buyerIntent": "what the buyer wants to achieve",
+  "queryType": "ingredient-specific | budget-conscious | use-case-driven | comparison | problem-solution | brand-specific | other",
+  "extractedAttributes": ["intent attributes from the prompt"],
+  "matchedAttributes": ["attributes the product clearly covers — including inferred ones"],
+  "missingSignals": ["specific gaps — be precise about what's missing and why it matters"],
+  "intentCoverageScore": <0–100>,
+  "recommendations": ["3–5 specific, actionable fixes for THIS product to win THIS prompt"],
+  "reasoning": "1 sentence verdict — e.g. 'Partially visible: product covers digestibility but lacks explicit mention of lactose content which this query strongly implies'"
+}`
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: MODEL,
+      max_tokens: 1000,
+      temperature: 0.2,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    })
+
+    const raw = completion.choices[0].message.content.trim()
+    return safeParseJSON(raw)
+  } catch (err) {
+    logger.error("Prompt visibility scoring failed:", err.message)
+    throw new Error(`Prompt scoring failed: ${err.message}`)
+  }
+}
+
+/**
+ * Batch-score multiple prompts for a product in a single AI call.
+ * Uses product interpretation for consistency across all scores.
+ */
+async function batchScorePrompts(prompts, product, existingAnalysis) {
+  const systemPrompt = `You are an AI commerce visibility analyst. Score multiple shopping prompts for one product.
+
+You have the product's deep interpretation. Every score must be grounded in the product's actual identity, buyer, and use cases.
+
+Respond ONLY with valid JSON array.`
+
+  const interpretation = existingAnalysis?.interpretation || {}
+
+  const userPrompt = `Score these AI shopping prompts for product visibility:
+
+PRODUCT:
+- Title: ${product.title}
+- Core Identity: ${interpretation.productIdentity?.coreProduct || product.title}
+- Target Buyer: ${interpretation.audienceProfile?.primaryBuyer || "Unknown"}
+- Inferred Attributes: ${(interpretation.semanticAttributes?.inferredAttributes || []).map((a) => a.attribute).join(", ") || "None"}
+- Description: ${(product.description || "").replace(/<[^>]*>/g, "").slice(0, 400)}
+- Tags: ${(product.tags || []).join(", ")}
+
+PROMPTS TO SCORE:
+${prompts.map((p, i) => `${i + 1}. "${p}"`).join("\n")}
+
+Return JSON array (one object per prompt, same order):
+[{
+  "prompt": "exact prompt text",
+  "buyerIntent": "...",
+  "queryType": "...",
+  "extractedAttributes": ["..."],
+  "matchedAttributes": ["..."],
+  "missingSignals": ["..."],
+  "intentCoverageScore": <0-100>,
+  "recommendations": ["specific fixes for THIS product for THIS prompt"]
+}]`
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: MODEL,
+      max_tokens: 2500,
+      temperature: 0.2,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    })
+
+    const raw = completion.choices[0].message.content.trim()
+    const parsed = safeParseJSON(raw)
+    return Array.isArray(parsed) ? parsed : parsed.prompts || []
+  } catch (err) {
+    logger.error("Batch prompt scoring failed:", err.message)
+    throw new Error(`Batch prompt scoring failed: ${err.message}`)
+  }
+}
+
+/**
+ * Generate an llms.txt file for the store.
+ */
+async function generateLlmsTxt(store, products) {
+  const productSummaries = products
+    .slice(0, 50)
+    .map(
+      (p) =>
+        `- ${p.title} (${p.productType || "Product"}): ${(p.description || "").replace(/<[^>]*>/g, "").slice(0, 200)}`,
+    )
+    .join("\n")
+
+  const prompt = `Generate an llms.txt file for this Shopify store to help AI systems understand and recommend their products.
+
+STORE: ${store.shopName || store.shopDomain}
+PRODUCTS:\n${productSummaries}
+
+The llms.txt should:
+1. Start with # Store Name
+2. Include a > blockquote with a 1-sentence store description
+3. List key product categories
+4. Include semantic signals for AI engines
+5. List the best use cases the store serves
+6. Be formatted in clean Markdown
+
+Keep it concise (under 500 words).`
+
+  const completion = await openai.chat.completions.create({
+    model: MODEL,
+    max_tokens: 800,
+    temperature: 0.4,
+    messages: [{ role: "user", content: prompt }],
+  })
+
+  return completion.choices[0].message.content.trim()
+}
+
+// ─────────────────────────────────────────────────────────────
+// SIGNAL BUILDERS — Extract rich context from product data
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Extract semantic signals from product reviews.
+ * The gold line: "easy on stomach" → digestion-friendly = YES
+ */
+function buildReviewSignals(product) {
+  if (!product.reviews?.length) return null
+
+  const reviews = product.reviews.slice(0, 30) // Use up to 30 reviews
+
+  // Extract repeated phrases, sentiment patterns, attribute mentions
+  const allText = reviews
+    .map((r) => `[${r.rating || "?"}★] ${r.body || r.content || ""}`)
+    .join("\n")
+    .slice(0, 3000)
+
+  // Return the raw review text — the AI will extract patterns
+  return allText
+    ? `Raw review patterns (${reviews.length} reviews):\n${allText}`
+    : null
+}
+
+/**
+ * Build a readable variant summary for interpretation.
+ */
+function buildVariantSignals(product) {
+  const variants = product.variants || []
+  if (!variants.length) return null
+
+  // Extract unique option names and values
+  const optionMap = {}
+  variants.forEach((v) => {
+    if (v.option1 && v.option1 !== "Default Title") {
+      const key = v.option1Name || "Option 1"
+      optionMap[key] = optionMap[key] || new Set()
+      optionMap[key].add(v.option1)
+    }
+    if (v.option2) {
+      const key = v.option2Name || "Option 2"
+      optionMap[key] = optionMap[key] || new Set()
+      optionMap[key].add(v.option2)
+    }
+    if (v.option3) {
+      const key = v.option3Name || "Option 3"
+      optionMap[key] = optionMap[key] || new Set()
+      optionMap[key].add(v.option3)
+    }
+  })
+
+  return (
+    Object.entries(optionMap)
+      .map(([key, values]) => `${key}: ${Array.from(values).join(", ")}`)
+      .join("\n") || null
+  )
+}
+
+/**
+ * Build pricing context for interpretation.
+ */
+function buildPricingContext(product) {
+  const variants = product.variants || []
+  if (!variants.length) return product.price ? `$${product.price}` : null
+
+  const prices = variants
+    .map((v) => parseFloat(v.price))
+    .filter((p) => !isNaN(p) && p > 0)
+
+  if (!prices.length) return null
+
+  const min = Math.min(...prices)
+  const max = Math.max(...prices)
+
+  return min === max
+    ? `$${min.toFixed(2)}`
+    : `$${min.toFixed(2)} – $${max.toFixed(2)}`
+}
+
+// ─────────────────────────────────────────────────────────────
+// HELPER
+// ─────────────────────────────────────────────────────────────
+
+function safeParseJSON(raw) {
+  try {
+    const clean = raw
+      .replace(/^```json\s*/i, "")
+      .replace(/```\s*$/, "")
+      .trim()
+    return JSON.parse(clean)
+  } catch (e) {
+    logger.warn("JSON parse failed, attempting extraction:", e.message)
+    const match = raw.match(/[\[{][\s\S]*[\]}]/)
+    if (match) return JSON.parse(match[0])
+    throw new Error("Could not parse AI response as JSON")
+  }
+}
+
+export {
+  interpretProduct,
+  analyseProduct,
+  generateSmartPrompts,
+  simulatePromptForProduct,
+  analysePromptIntelligence,
+  scorePromptVisibility,
+  batchScorePrompts,
+  generateLlmsTxt,
+}
