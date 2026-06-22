@@ -19,6 +19,7 @@ import webhookRoutes from "./routes/webhook.routes.js"
 import adminRoutes from "./routes/admin.routes.js"
 
 const app = express()
+app.set("trust proxy", 1)
 
 // Webhooks need raw body — before express.json()
 app.use(
