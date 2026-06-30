@@ -31,55 +31,56 @@ function getQueue() {
 /**
  * Enqueue a single product analysis job.
  * Prevents duplicate jobs for the same product.
- */
-async function enqueueAnalysis(productId, storeId, priority = 10) {
+ */async function enqueueAnalysis(productId, storeId, priority = 10) {
   const queue = getQueue()
 
-  // Check if job already exists for this product that's not completed/failed
-  const activeJobs = await queue.getActive()
-  const waitingJobs = await queue.getWaiting()
-  const delayedJobs = await queue.getDelayed()
-
-  const pendingJobs = [...activeJobs, ...waitingJobs, ...delayedJobs]
-  const existingJob = pendingJobs.find(
-    (j) => j.data.productId === productId.toString(),
+  logger.info(
+    `[QUEUE] enqueueAnalysis() called for product=${productId} store=${storeId}`,
   )
 
-  if (existingJob) {
-    logger.info(
-      `Product ${productId} already has pending job ${existingJob.id}, skipping duplicate`,
-    )
-    return existingJob.id
-  }
-
-  // Create new job
   const job = await queue.add(
     "analyse-product",
-    { productId: productId.toString(), storeId: storeId.toString() },
-    { priority, delay: parseInt(process.env.QUEUE_JOB_DELAY_MS) || 500 },
+    {
+      productId: productId.toString(),
+      storeId: storeId.toString(),
+    },
+    {
+      jobId: `${storeId}:${productId}`, // prevents duplicates
+      priority,
+      delay: Number(process.env.QUEUE_JOB_DELAY_MS) || 500,
+    },
   )
-  logger.info(`Enqueued analysis job ${job.id} for product ${productId}`)
+
+  logger.info(`[QUEUE] Job queued successfully: ${job.id}`)
+
   return job.id
 }
 
 /**
  * Enqueue multiple products for bulk analysis.
- */
-async function enqueueBulkAnalysis(productIds, storeId) {
+ */async function enqueueBulkAnalysis(productIds, storeId) {
   const queue = getQueue()
-  const jobs = productIds.map((productId, i) => ({
+
+  const jobs = productIds.map((productId, index) => ({
     name: "analyse-product",
-    data: { productId: productId.toString(), storeId: storeId.toString() },
+    data: {
+      productId: productId.toString(),
+      storeId: storeId.toString(),
+    },
     opts: {
-      priority: 20, // lower priority than single
-      delay: i * (parseInt(process.env.QUEUE_JOB_DELAY_MS) || 500),
+      jobId: `${storeId}:${productId}`,
+      priority: 20,
+      delay: index * (Number(process.env.QUEUE_JOB_DELAY_MS) || 500),
     },
   }))
+
+  logger.info(`[QUEUE] Adding ${jobs.length} bulk jobs`)
+
   const added = await queue.addBulk(jobs)
-  logger.info(
-    `Enqueued ${added.length} bulk analysis jobs for store ${storeId}`,
-  )
-  return added.map((j) => j.id)
+
+  logger.info(`[QUEUE] Added ${added.length} jobs`)
+
+  return added.map((job) => job.id)
 }
 
 /**
