@@ -17,6 +17,7 @@ import promptRoutes from "./routes/prompt.routes.js"
 import reportRoutes from "./routes/report.routes.js"
 import webhookRoutes from "./routes/webhook.routes.js"
 import adminRoutes from "./routes/admin.routes.js"
+import dashboardRoutes from "./routes/dashboard.routes.js"
 
 const app = express()
 app.set("trust proxy", 1)
@@ -51,6 +52,7 @@ app.use("/recomind/v1/products", productRoutes)
 app.use("/recomind/v1/prompts", promptRoutes)
 app.use("/recomind/v1/reports", reportRoutes)
 app.use("/recomind/v1/admin", adminRoutes)
+app.use('/recomind/v1/dashboard', dashboardRoutes)
 
 app.get("/v1/health", (req, res) => {
   res.json({ status: "ok", service: "RecoMind API", version: "1.0.0" })
