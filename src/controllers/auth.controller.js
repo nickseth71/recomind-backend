@@ -103,7 +103,7 @@ async function registerStore(req, res, next) {
     })
 
     // Issue JWT
-    const token = signToken(store._id, shop)
+    const token = signToken(store._id, shop, store.plan)
 
     res.json({
       success: true,
@@ -182,7 +182,7 @@ async function getStoreToken(req, res) {
       })
     }
 
-    const token = signToken(store._id)
+    const token = signToken(store._id, shop, store.plan)
 
     return res.json({
       success: true,

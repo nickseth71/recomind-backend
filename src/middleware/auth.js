@@ -64,9 +64,9 @@ function requireAdmin(req, res, next) {
   next()
 }
 
-function signToken(storeId, shopDomain) {
+function signToken(storeId, shopDomain, storePlan) {
   return jwt.sign(
-    { storeId: storeId.toString(), shopDomain },
+    { storeId: storeId.toString(), shopDomain, storePlan },
     process.env.JWT_SECRET,
     {
       expiresIn: process.env.JWT_EXPIRES_IN || "7d",
