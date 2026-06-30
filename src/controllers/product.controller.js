@@ -114,7 +114,7 @@ async function getProduct(req, res, next) {
       null,
       { sort: { createdAt: -1 } },
     ).lean()
-
+    
     res.json({
       success: true,
       data: {
