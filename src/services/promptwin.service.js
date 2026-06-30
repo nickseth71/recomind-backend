@@ -96,6 +96,37 @@ async function scorePromptForProduct(prompt, product, analysis) {
  * options.manual         — true if user-supplied prompts
  * options.maxPrompts     — override plan limit
  */
+// ─────────────────────────────────────────────────────────────
+// winProbability (Stage 3) → visibility (ProductPrompt) mapping
+// These are deliberately the SAME scale — HIGH/MEDIUM/LOW — so the
+// dashboard never disagrees with the analysis tab on the same prompt.
+// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// winProbability (Stage 3) → visibility (ProductPrompt) mapping
+// These are deliberately the SAME scale — HIGH/MEDIUM/LOW — so the
+// dashboard never disagrees with the analysis tab on the same prompt.
+// ─────────────────────────────────────────────────────────────
+function winProbabilityToVisibility(wp) {
+  if (wp === "HIGH" || wp === "MEDIUM" || wp === "LOW") return wp
+  return "LOW" // unknown/missing defaults conservative, same as before
+}
+
+// Score bands per visibility bucket. The AI still generates a real
+// 0-100 intentCoverageScore per prompt (so prompts within the same
+// bucket can differ — e.g. two HIGH prompts as 78 and 94), but we
+// clamp it into the band that matches Stage 3's winProbability so
+// the bucket label and the numeric score never contradict each other.
+const VISIBILITY_SCORE_BAND = {
+  HIGH: { min: 70, max: 100 },
+  MEDIUM: { min: 40, max: 69 },
+  LOW: { min: 0, max: 39 },
+}
+
+function clampScoreToBand(score, visibility) {
+  const band = VISIBILITY_SCORE_BAND[visibility] || VISIBILITY_SCORE_BAND.LOW
+  return Math.min(band.max, Math.max(band.min, Math.round(score)))
+}
+
 async function generateAndScorePrompts(
   productId,
   storeId,
@@ -118,132 +149,183 @@ async function generateAndScorePrompts(
     }).lean())
 
   // ── Prompt source priority ─────────────────────────────────────────
-  // 1. Manually supplied prompts (user typed them in)
-  // 2. Smart prompts from Stage 3 (already in analysis.smartPrompts)
-  // 3. Rule-based templates (legacy fallback)
-  let promptTexts
-  if (options.prompts?.length) {
-    promptTexts = options.prompts
+  // 1. Manually supplied prompts (plain strings, no winProbability)
+  // 2. Pre-generated Stage 3 smart prompts (full objects WITH winProbability)
+  // 3. Smart prompts already in analysis.smartPrompts (same as #2, fallback path)
+  // 4. Rule-based templates (legacy fallback, no winProbability)
+  //
+  // promptObjects: [{ prompt, winProbability?, intent, promptType, targetedAttribute }, ...]
+  // Entries WITHOUT winProbability are scored fully fresh (visibility + score).
+  // Entries WITH winProbability are AI-scored too, but the score is clamped
+  // to match the winProbability band so visibility never disagrees with Stage 3.
+  let promptObjects
+
+  if (options.prompts?.length && typeof options.prompts[0] === "object") {
+    promptObjects = options.prompts
+  } else if (options.prompts?.length) {
+    promptObjects = options.prompts.map((p) => ({ prompt: p }))
   } else if (analysis?.smartPrompts?.prompts?.length) {
-    // Prefer high-value prompts first, then the rest
     const highValue = analysis.smartPrompts.highValuePrompts || []
-    const allPrompts = analysis.smartPrompts.prompts.map((p) => p.prompt)
-    const ordered = [
+    const allPrompts = analysis.smartPrompts.prompts
+    const promptMap = new Map(allPrompts.map((p) => [p.prompt, p]))
+    const orderedTexts = [
       ...highValue,
-      ...allPrompts.filter((p) => !highValue.includes(p)),
+      ...allPrompts.map((p) => p.prompt).filter((p) => !highValue.includes(p)),
     ]
-    promptTexts = [...new Set(ordered)].filter(Boolean)
+    const seen = new Set()
+    promptObjects = orderedTexts
+      .filter((p) => {
+        if (seen.has(p)) return false
+        seen.add(p)
+        return true
+      })
+      .map((p) => promptMap.get(p) || { prompt: p })
   } else {
-    promptTexts = generatePromptTemplates(product, analysis)
+    const templates = generatePromptTemplates(product, analysis)
+    promptObjects = templates.map((p) => ({ prompt: p }))
   }
 
-  const toProcess = promptTexts.slice(0, maxPrompts)
+  const toProcess = promptObjects.slice(0, maxPrompts).filter((p) => p.prompt)
   const results = []
+  const promptMetaByText = new Map(toProcess.map((p) => [p.prompt, p]))
 
-  // ── Batch score in chunks of 10 ───────────────────────────────────
+  // ── AI-score every prompt in batches (real per-prompt variance) ─────
   const BATCH_SIZE = 10
+  let allScored = []
   for (let i = 0; i < toProcess.length; i += BATCH_SIZE) {
-    const chunk = toProcess.slice(i, i + BATCH_SIZE)
-    let scoredChunk = []
+    const chunkObjs = toProcess.slice(i, i + BATCH_SIZE)
+    const chunk = chunkObjs.map((p) => p.prompt)
+    if (!chunk.length) continue
 
     try {
-      // Pass analysis (with interpretation) for deeper, context-aware scoring
       const batchResults = await aiService.batchScorePrompts(
         chunk,
         product,
         analysis,
       )
-      scoredChunk = batchResults.map((r, idx) => {
-        const score = r.intentCoverageScore ?? 0
-        const visibility = scoreToVisibility(score)
-        return {
-          prompt: r.prompt || chunk[idx],
-          buyerIntent: r.buyerIntent,
-          queryType: r.queryType,
-          extractedAttributes: r.extractedAttributes || [],
-          matchedAttributes: r.matchedAttributes || [],
-          missingSignals: r.missingSignals || [],
-          intentCoverageScore: score,
-          visibility,
-          statusMessage: visibilityMessage(visibility, r.prompt),
-          recommendations: r.recommendations || [],
-        }
-      })
+      allScored.push(
+        ...batchResults.map((r, idx) => {
+          const promptText = r.prompt || chunk[idx]
+          const meta = promptMetaByText.get(promptText) || {}
+          const rawScore = r.intentCoverageScore ?? 0
+
+          // If Stage 3 already gave a winProbability for this prompt,
+          // lock the visibility bucket to that and clamp the AI's
+          // fresh score into the matching band. Otherwise let the
+          // AI score determine visibility from scratch (manual prompts,
+          // legacy templates).
+          const visibility = meta.winProbability
+            ? winProbabilityToVisibility(meta.winProbability)
+            : scoreToVisibility(rawScore)
+
+          const score = meta.winProbability
+            ? clampScoreToBand(rawScore, visibility)
+            : rawScore
+
+          return {
+            prompt: promptText,
+            buyerIntent: r.buyerIntent || meta.intent || "",
+            queryType: r.queryType || meta.promptType || "",
+            extractedAttributes:
+              r.extractedAttributes ||
+              (meta.targetedAttribute ? [meta.targetedAttribute] : []),
+            matchedAttributes: r.matchedAttributes || [],
+            missingSignals: r.missingSignals || [],
+            intentCoverageScore: score,
+            visibility,
+            statusMessage: visibilityMessage(visibility, promptText),
+            recommendations: r.recommendations || [],
+          }
+        }),
+      )
     } catch (err) {
       logger.warn(
         `Batch scoring failed, falling back to single: ${err.message}`,
       )
-      for (const promptText of chunk) {
+      for (const promptObj of chunkObjs) {
         try {
-          scoredChunk.push(
-            await scorePromptForProduct(promptText, product, analysis),
+          const single = await scorePromptForProduct(
+            promptObj.prompt,
+            product,
+            analysis,
           )
+          const meta = promptObj
+          if (meta.winProbability) {
+            const visibility = winProbabilityToVisibility(meta.winProbability)
+            single.visibility = visibility
+            single.intentCoverageScore = clampScoreToBand(
+              single.intentCoverageScore ?? 0,
+              visibility,
+            )
+            single.statusMessage = visibilityMessage(visibility, single.prompt)
+          }
+          allScored.push(single)
         } catch (e) {
-          logger.warn(`Failed to score "${promptText}": ${e.message}`)
+          logger.warn(`Failed to score "${promptObj.prompt}": ${e.message}`)
         }
       }
     }
+  }
 
-    // ── Upsert each scored prompt ──────────────────────────────────
-    for (const scored of scoredChunk) {
-      const promptText = scored.prompt
-      if (!promptText) continue
+  // ── Upsert each scored prompt (unchanged from before) ───────────────
+  for (const scored of allScored) {
+    const promptText = scored.prompt
+    if (!promptText) continue
 
-      const trackedCount = await ProductPrompt.countDocuments({
-        storeId,
-        isTracked: true,
-      })
+    const trackedCount = await ProductPrompt.countDocuments({
+      storeId,
+      isTracked: true,
+    })
 
-      const canTrack =
-        limits.totalTrackedPrompts === Infinity ||
-        trackedCount < limits.totalTrackedPrompts
+    const canTrack =
+      limits.totalTrackedPrompts === Infinity ||
+      trackedCount < limits.totalTrackedPrompts
 
-      const existing = await ProductPrompt.findOne({
-        storeId,
-        productId,
-        prompt: promptText,
-      })
+    const existing = await ProductPrompt.findOne({
+      storeId,
+      productId,
+      prompt: promptText,
+    })
 
-      const scoreEntry = {
-        score: scored.intentCoverageScore,
+    const scoreEntry = {
+      score: scored.intentCoverageScore,
+      visibility: scored.visibility,
+      scoredAt: new Date(),
+    }
+
+    if (existing) {
+      Object.assign(existing, {
+        buyerIntent: scored.buyerIntent,
+        queryType: scored.queryType,
+        extractedAttributes: scored.extractedAttributes,
+        matchedAttributes: scored.matchedAttributes,
+        missingSignals: scored.missingSignals,
+        intentCoverageScore: scored.intentCoverageScore,
         visibility: scored.visibility,
-        scoredAt: new Date(),
+        statusMessage: scored.statusMessage,
+        recommendations: scored.recommendations,
+        lastScoredAt: new Date(),
+      })
+      if (limits.promptTracking) {
+        existing.scoreHistory = [
+          ...(existing.scoreHistory || []).slice(-11),
+          scoreEntry,
+        ]
       }
-
-      if (existing) {
-        Object.assign(existing, {
-          buyerIntent: scored.buyerIntent,
-          queryType: scored.queryType,
-          extractedAttributes: scored.extractedAttributes,
-          matchedAttributes: scored.matchedAttributes,
-          missingSignals: scored.missingSignals,
-          intentCoverageScore: scored.intentCoverageScore,
-          visibility: scored.visibility,
-          statusMessage: scored.statusMessage,
-          recommendations: scored.recommendations,
-          lastScoredAt: new Date(),
-        })
-        if (limits.promptTracking) {
-          existing.scoreHistory = [
-            ...(existing.scoreHistory || []).slice(-11),
-            scoreEntry,
-          ]
-        }
-        await existing.save()
-        results.push(existing)
-      } else {
-        const created = await ProductPrompt.create({
-          productId: product._id,
-          storeId,
-          prompt: promptText,
-          ...scored,
-          isTracked: canTrack,
-          lastScoredAt: new Date(),
-          scoreHistory: limits.promptTracking ? [scoreEntry] : [],
-          generatedBy: options.manual ? "manual" : "auto",
-        })
-        results.push(created)
-      }
+      await existing.save()
+      results.push(existing)
+    } else {
+      const created = await ProductPrompt.create({
+        productId: product._id,
+        storeId,
+        prompt: promptText,
+        ...scored,
+        isTracked: canTrack,
+        lastScoredAt: new Date(),
+        scoreHistory: limits.promptTracking ? [scoreEntry] : [],
+        generatedBy: options.manual ? "manual" : "auto",
+      })
+      results.push(created)
     }
   }
 

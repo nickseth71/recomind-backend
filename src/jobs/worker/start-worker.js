@@ -162,8 +162,7 @@ async function processAnalysisJob(productId, storeId, job) {
 
     if (store?.hasFeature("promptWinDashboard")) {
       try {
-        const preGeneratedPrompts =
-          result.smartPrompts?.prompts?.map((p) => p.prompt) || []
+        const preGeneratedPrompts = result.smartPrompts?.prompts || []
         await promptWinService.generateAndScorePrompts(
           productId,
           storeId,
