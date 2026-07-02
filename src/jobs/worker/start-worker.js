@@ -10,6 +10,7 @@ import AuditLog from "../../models/auditlog.model.js"
 import Store from "../../models/store.model.js"
 import { TOKEN_COSTS } from "../../config/plans.js"
 import crypto from "crypto"
+import { getPromptLimits } from "../../config/plans.js"
 
 const QUEUE_NAME = "recomind-ai-jobs"
 const CONCURRENCY = parseInt(process.env.QUEUE_CONCURRENCY) || 3
@@ -91,6 +92,15 @@ async function processAnalysisJob(productId, storeId, job) {
       result.faqAnalysis ||
       analyzeFaqState(product.existingFaqs, result.faq, result.scoreBreakdown)
 
+    const store = await Store.findById(storeId)
+    const planLimits = getPromptLimits(store.plan, store.addons || {})
+    const competitorBenchmark = aiService.buildCompetitorBenchmark(
+      planLimits.competitorCount,
+      product,
+      result.interpretation,
+      result.score,
+    )
+
     // ── Persist analysis ──────────────────────────────────────────────
     const analysis = await ProductAnalysis.create({
       productId: product._id,
@@ -123,6 +133,9 @@ async function processAnalysisJob(productId, storeId, job) {
       faq: result.faq || [],
       faqAnalysis,
 
+      // Competitor benchmark
+      competitorBenchmark,
+
       // Optimized content
       optimizedTitle: result.optimizedTitle,
       optimizedDescription: result.optimizedDescription,
@@ -153,7 +166,7 @@ async function processAnalysisJob(productId, storeId, job) {
     // ── Auto-generate Prompt Win scores ───────────────────────────────
     // Now uses smartPrompts from the analysis instead of generating new ones,
     // so promptWinService should accept pre-generated prompts when available.
-    const store = await Store.findById(storeId)
+    // const store = await Store.findById(storeId)
 
     store.usage.productsAnalyzed += 1
     store.usage.autoPromptsGenerated +=
