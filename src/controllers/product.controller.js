@@ -100,40 +100,39 @@ async function listProducts(req, res, next) {
  */
 async function getProduct(req, res, next) {
   try {
-    const product = await Product.findOne({
-      _id: req.params.id,
-      storeId: req.store._id,
-    }).lean()
+    const product = await Product.findOne(
+      { _id: req.params.id, storeId: req.store._id },
+      "title productType vendor isOptimized images",
+    ).lean()
     if (!product)
       return res
         .status(404)
         .json({ success: false, error: "Product not found" })
 
+    const planLimits = req.store.getPromptLimits()
+    const competitorCount = planLimits.competitorCount || 0
+
     const latestAnalysis = await ProductAnalysis.findOne(
       { productId: product._id },
-      null,
+      "score scoreBreakdown reasoning engineCoverage bestFor intentKeywords intentClusters missingSignals comparisonOpportunities trustSignals prioritizedFixes faq faqAnalysis smartPrompts interpretation competitorBenchmark",
       { sort: { createdAt: -1 } },
     ).lean()
+
+    const analysis = latestAnalysis
+      ? {
+          ...latestAnalysis,
+          competitorBenchmark:
+            competitorCount > 0
+              ? latestAnalysis.competitorBenchmark || null
+              : null,
+        }
+      : null
 
     res.json({
       success: true,
       data: {
         product,
-        analysis: latestAnalysis,
-        // NEW: expose interpretation and smart prompts for the frontend
-        interpretation: latestAnalysis?.interpretation || null,
-        smartPrompts: latestAnalysis?.smartPrompts || null,
-        prioritizedFixes: latestAnalysis?.prioritizedFixes || [],
-        faqInfo: latestAnalysis
-          ? {
-              existingFaqs:
-                latestAnalysis.existingFaqs || product.existingFaqs || [],
-              suggestedFaqs: latestAnalysis.faq || [],
-              faqAnalysis: latestAnalysis.faqAnalysis,
-              productFaqSource: product.faqSource,
-              hasFaqSection: product.hasFaqSection,
-            }
-          : null,
+        analysis,
       },
     })
   } catch (err) {
@@ -315,6 +314,50 @@ async function getAnalyses(req, res, next) {
       .lean()
 
     res.json({ success: true, data: analyses })
+  } catch (err) {
+    next(err)
+  }
+}
+
+async function getCompetitorBenchmark(req, res, next) {
+  try {
+    const product = await Product.findOne({
+      _id: req.params.id,
+      storeId: req.store._id,
+    }).lean()
+    if (!product)
+      return res
+        .status(404)
+        .json({ success: false, error: "Product not found" })
+
+    const latestAnalysis = await ProductAnalysis.findOne(
+      { productId: product._id },
+      null,
+      { sort: { createdAt: -1 } },
+    ).lean()
+
+    if (!latestAnalysis)
+      return res.status(404).json({
+        success: false,
+        error:
+          "No analysis available for this product. Run product analysis first.",
+      })
+
+    const planLimits = req.store.getPromptLimits()
+    const competitorCount = planLimits.competitorCount || 0
+    const enabled = competitorCount > 0
+
+    res.json({
+      success: true,
+      data: {
+        enabled,
+        competitorCount,
+        competitorBenchmark: enabled
+          ? latestAnalysis.competitorBenchmark || null
+          : null,
+        plan: req.store.plan,
+      },
+    })
   } catch (err) {
     next(err)
   }
@@ -814,6 +857,7 @@ export {
   analyseProduct,
   analyseBulk,
   getAnalyses,
+  getCompetitorBenchmark,
   optimiseProduct,
   rollbackProduct,
   syncProducts,

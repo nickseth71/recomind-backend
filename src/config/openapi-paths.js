@@ -55,7 +55,14 @@ const jsonBody = (schema, required = false) => ({
 })
 
 const ok = (description) => ({
-  200: { description, content: { "application/json": { schema: { $ref: "#/components/schemas/SuccessResponse" } } } },
+  200: {
+    description,
+    content: {
+      "application/json": {
+        schema: { $ref: "#/components/schemas/SuccessResponse" },
+      },
+    },
+  },
 })
 
 const openapiPaths = {
@@ -170,7 +177,11 @@ const openapiPaths = {
       security: bearer,
       parameters: [
         { name: "page", in: "query", schema: { type: "integer", default: 1 } },
-        { name: "limit", in: "query", schema: { type: "integer", default: 20 } },
+        {
+          name: "limit",
+          in: "query",
+          schema: { type: "integer", default: 20 },
+        },
         {
           name: "sort",
           in: "query",
@@ -253,6 +264,44 @@ const openapiPaths = {
     },
   },
 
+  "/products/{id}/competitors": {
+    get: {
+      tags: ["Products"],
+      summary: "Get product competitor benchmark for this plan",
+      security: bearer,
+      parameters: [idPath],
+      responses: {
+        200: {
+          description: "Competitor benchmark data",
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  success: { type: "boolean", example: true },
+                  data: {
+                    type: "object",
+                    properties: {
+                      enabled: { type: "boolean", example: true },
+                      competitorCount: { type: "integer", example: 3 },
+                      competitorBenchmark: {
+                        type: ["object", "null"],
+                        description:
+                          "Benchmark table returned only when competitor analysis is enabled",
+                      },
+                      plan: { type: "string", example: "growth" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        404: { description: "Product or analysis not found" },
+      },
+    },
+  },
+
   "/products/{id}/optimise": {
     post: {
       tags: ["Products"],
@@ -274,7 +323,10 @@ const openapiPaths = {
               required: ["question", "answer"],
               properties: {
                 question: { type: "string", example: "Is this lactose-free?" },
-                answer: { type: "string", example: "Yes, it contains no lactose." },
+                answer: {
+                  type: "string",
+                  example: "Yes, it contains no lactose.",
+                },
               },
             },
           },
@@ -343,7 +395,11 @@ const openapiPaths = {
       security: bearer,
       parameters: [
         { name: "page", in: "query", schema: { type: "integer", default: 1 } },
-        { name: "limit", in: "query", schema: { type: "integer", default: 20 } },
+        {
+          name: "limit",
+          in: "query",
+          schema: { type: "integer", default: 20 },
+        },
       ],
       responses: ok("Simulation history"),
     },
@@ -495,7 +551,11 @@ const openapiPaths = {
       security: bearer,
       parameters: [
         { name: "page", in: "query", schema: { type: "integer", default: 1 } },
-        { name: "limit", in: "query", schema: { type: "integer", default: 30 } },
+        {
+          name: "limit",
+          in: "query",
+          schema: { type: "integer", default: 30 },
+        },
         { name: "action", in: "query", schema: { type: "string" } },
       ],
       responses: ok("Audit log entries"),
@@ -518,11 +578,18 @@ const openapiPaths = {
       security: adminSec,
       parameters: [
         { name: "page", in: "query", schema: { type: "integer", default: 1 } },
-        { name: "limit", in: "query", schema: { type: "integer", default: 20 } },
+        {
+          name: "limit",
+          in: "query",
+          schema: { type: "integer", default: 20 },
+        },
         {
           name: "plan",
           in: "query",
-          schema: { type: "string", enum: ["starter", "growth", "pro", "agency"] },
+          schema: {
+            type: "string",
+            enum: ["starter", "growth", "pro", "agency"],
+          },
         },
         { name: "active", in: "query", schema: { type: "boolean" } },
         { name: "search", in: "query", schema: { type: "string" } },
@@ -574,7 +641,11 @@ const openapiPaths = {
       security: adminSec,
       parameters: [
         { name: "page", in: "query", schema: { type: "integer", default: 1 } },
-        { name: "limit", in: "query", schema: { type: "integer", default: 30 } },
+        {
+          name: "limit",
+          in: "query",
+          schema: { type: "integer", default: 30 },
+        },
         { name: "action", in: "query", schema: { type: "string" } },
         { name: "storeId", in: "query", schema: { type: "string" } },
       ],
