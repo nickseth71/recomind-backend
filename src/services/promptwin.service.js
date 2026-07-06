@@ -57,6 +57,58 @@ function generatePromptTemplates(product, analysis) {
   return [...prompts].filter(Boolean).slice(0, 20)
 }
 
+function normalizeArray(value, fallback = []) {
+  if (Array.isArray(value)) {
+    return value.filter(
+      (item) => item !== null && item !== undefined && item !== "",
+    )
+  }
+  return fallback
+}
+
+function buildPromptInsights(result = {}, analysis = {}) {
+  const interpretation = analysis?.interpretation || {}
+  const competitorNames = normalizeArray(
+    interpretation?.competitiveContext?.directCompetitors || [],
+    [],
+  )
+  const inferredAttributes = normalizeArray(
+    (interpretation?.semanticAttributes?.inferredAttributes || []).map(
+      (attr) => attr?.attribute,
+    ),
+    [],
+  )
+  const keywordSignals = normalizeArray(analysis?.intentKeywords || [], [])
+  const missingSignals = normalizeArray(analysis?.missingSignals || [], [])
+  const fixHints = normalizeArray(
+    (analysis?.prioritizedFixes || []).map(
+      (fix) => fix?.fix || fix?.title || fix,
+    ),
+    [],
+  )
+
+  return {
+    comparison: normalizeArray(
+      result.comparison,
+      analysis?.comparisonOpportunities || competitorNames,
+    ),
+    rankingFactors: normalizeArray(
+      result.rankingFactors,
+      [...inferredAttributes, ...keywordSignals].slice(0, 8),
+    ),
+    competitorDominating: normalizeArray(
+      result.competitorDominating,
+      competitorNames,
+    ),
+    semanticGaps: normalizeArray(result.semanticGaps, missingSignals),
+    reasoning: result.reasoning || result.reason || analysis?.reasoning || "",
+    recommendedActions: normalizeArray(
+      result.recommendedActions || result.actions,
+      fixHints,
+    ),
+  }
+}
+
 /**
  * Score a single prompt against a product using AI intent decomposition.
  * Accepts existingAnalysis so interpretation context is always passed through.
@@ -70,6 +122,7 @@ async function scorePromptForProduct(prompt, product, analysis) {
 
   const score = result.intentCoverageScore ?? result.recommendationScore ?? 0
   const visibility = scoreToVisibility(score)
+  const insights = buildPromptInsights(result, analysis)
 
   return {
     prompt,
@@ -79,11 +132,18 @@ async function scorePromptForProduct(prompt, product, analysis) {
       result.extractedAttributes || result.expectedAttributes || [],
     matchedAttributes: result.matchedAttributes || [],
     missingSignals: result.missingSignals || [],
+    comparison: insights.comparison,
+    rankingFactors: insights.rankingFactors,
+    competitorDominating: insights.competitorDominating,
+    semanticGaps: insights.semanticGaps,
+    reasoning: insights.reasoning,
+    recommendedActions: insights.recommendedActions,
     intentCoverageScore: score,
     visibility,
     statusMessage: visibilityMessage(visibility, prompt),
     visibilityLabel: visibilityLabel(visibility),
-    recommendations: result.recommendations || [],
+    recommendations:
+      result.recommendations || insights.recommendedActions || [],
   }
 }
 
@@ -135,7 +195,15 @@ async function generateAndScorePrompts(
 ) {
   const limits =
     store.getPromptLimits?.() || getPromptLimits(store.plan, store.addons)
-  const maxPrompts = options.maxPrompts || limits.promptsPerProduct
+  let maxPrompts = options.maxPrompts || limits.promptsPerProduct
+  if (options.manual && Array.isArray(options.prompts)) {
+    maxPrompts = Math.min(
+      options.prompts.length,
+      limits.manualPromptsPerProduct,
+    )
+  } else if (options.manual) {
+    maxPrompts = limits.manualPromptsPerProduct
+  }
 
   const product = await Product.findOne({ _id: productId, storeId })
   if (!product) throw new Error("Product not found")
@@ -208,6 +276,7 @@ async function generateAndScorePrompts(
           const promptText = r.prompt || chunk[idx]
           const meta = promptMetaByText.get(promptText) || {}
           const rawScore = r.intentCoverageScore ?? 0
+          const insights = buildPromptInsights(r, analysis)
 
           // If Stage 3 already gave a winProbability for this prompt,
           // lock the visibility bucket to that and clamp the AI's
@@ -231,10 +300,17 @@ async function generateAndScorePrompts(
               (meta.targetedAttribute ? [meta.targetedAttribute] : []),
             matchedAttributes: r.matchedAttributes || [],
             missingSignals: r.missingSignals || [],
+            comparison: insights.comparison,
+            rankingFactors: insights.rankingFactors,
+            competitorDominating: insights.competitorDominating,
+            semanticGaps: insights.semanticGaps,
+            reasoning: insights.reasoning,
             intentCoverageScore: score,
             visibility,
             statusMessage: visibilityMessage(visibility, promptText),
-            recommendations: r.recommendations || [],
+            recommendations:
+              r.recommendations || insights.recommendedActions || [],
+            recommendedActions: insights.recommendedActions,
           }
         }),
       )
@@ -300,10 +376,16 @@ async function generateAndScorePrompts(
         extractedAttributes: scored.extractedAttributes,
         matchedAttributes: scored.matchedAttributes,
         missingSignals: scored.missingSignals,
+        comparison: scored.comparison,
+        rankingFactors: scored.rankingFactors,
+        competitorDominating: scored.competitorDominating,
+        semanticGaps: scored.semanticGaps,
+        reasoning: scored.reasoning,
         intentCoverageScore: scored.intentCoverageScore,
         visibility: scored.visibility,
         statusMessage: scored.statusMessage,
         recommendations: scored.recommendations,
+        recommendedActions: scored.recommendedActions,
         lastScoredAt: new Date(),
       })
       if (limits.promptTracking) {

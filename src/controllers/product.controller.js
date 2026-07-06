@@ -49,11 +49,20 @@ async function listProducts(req, res, next) {
     const page = Math.max(1, parseInt(req.query.page) || 1)
     const limit = Math.min(100, parseInt(req.query.limit) || 20)
     const skip = (page - 1) * limit
+    const search = (req.query.search || req.query.q || "").trim()
 
     const filter = { storeId }
     if (req.query.status) filter.status = req.query.status
     if (req.query.optimized !== undefined)
       filter.isOptimized = req.query.optimized === "true"
+    if (search) {
+      filter.$or = [
+        { title: { $regex: search, $options: "i" } },
+        { vendor: { $regex: search, $options: "i" } },
+        { productType: { $regex: search, $options: "i" } },
+        { handle: { $regex: search, $options: "i" } },
+      ]
+    }
 
     const sort = {}
     if (req.query.sort === "score_asc") sort.analysisScore = 1

@@ -33,9 +33,10 @@ router.post(
   ctrl.generateProductPrompts,
 )
 router.get(
-  "/:promptId/fix",
-  requireFeature("fixForPrompt"),
-  ctrl.getPromptFix,
+  "/:promptId",
+  requireFeature("promptWinDashboard"),
+  ctrl.getPromptDetails,
 )
+router.get("/:promptId/fix", requireFeature("fixForPrompt"), ctrl.getPromptFix)
 
 export default router
