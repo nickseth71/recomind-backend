@@ -1353,8 +1353,13 @@ Return JSON:
   "extractedAttributes": ["intent attributes from the prompt"],
   "matchedAttributes": ["attributes the product clearly covers"],
   "missingSignals": ["specific gaps"],
+  "comparison": ["how this prompt compares versus competitor content or query intent"],
+  "rankingFactors": ["core factors that would improve ranking for this prompt"],
+  "competitorDominating": ["brand or product competitors likely dominating this prompt"],
+  "semanticGaps": ["semantic gaps between the prompt and the product content"],
   "intentCoverageScore": 0,
   "recommendations": ["3–5 specific actionable fixes"],
+  "recommendedActions": ["recommended actions to improve visibility for this prompt"],
   "reasoning": "1 sentence verdict"
 }`
 
@@ -1403,8 +1408,14 @@ Return JSON array (one object per prompt, same order):
   "extractedAttributes": ["..."],
   "matchedAttributes": ["..."],
   "missingSignals": ["..."],
+  "comparison": ["..."],
+  "rankingFactors": ["..."],
+  "competitorDominating": ["..."],
+  "semanticGaps": ["..."],
   "intentCoverageScore": 0,
-  "recommendations": ["specific fixes for THIS product for THIS prompt"]
+  "recommendations": ["specific fixes for THIS product for THIS prompt"],
+  "recommendedActions": ["..."],
+  "reasoning": "..."
 }]`
 
   try {

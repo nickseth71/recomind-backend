@@ -1,3 +1,4 @@
+import mongoose from "mongoose"
 import Product from "../models/product.model.js"
 import ProductAnalysis from "../models/product-analysis.mode.js"
 import ProductPrompt from "../models/product-prompt.model.js"
@@ -46,7 +47,9 @@ async function getProductPrompts(req, res, next) {
       storeId: req.store._id,
     })
     if (!product)
-      return res.status(404).json({ success: false, error: "Product not found" })
+      return res
+        .status(404)
+        .json({ success: false, error: "Product not found" })
 
     const visibility = req.query.visibility
     const filter = { storeId: req.store._id, productId: product._id }
@@ -84,6 +87,50 @@ async function generateProductPrompts(req, res, next) {
       })
     }
 
+    const manualPrompts = Array.isArray(req.body.prompts)
+      ? req.body.prompts
+          .map((p) => {
+            if (typeof p === "string") return p
+            if (p && typeof p.prompt === "string") return p.prompt
+            return ""
+          })
+          .map((p) => p.trim())
+          .filter(Boolean)
+      : []
+    const isManual = manualPrompts.length > 0
+
+    if (isManual) {
+      const limits = req.store.getPromptLimits()
+      const manualLimit = limits.manualPromptsPerProduct
+      const uniquePrompts = [...new Set(manualPrompts)].slice(0, manualLimit)
+      const existingManualCount = await ProductPrompt.countDocuments({
+        storeId: req.store._id,
+        productId: req.params.productId,
+        generatedBy: "manual",
+      })
+
+      const remainingManual = Math.max(0, manualLimit - existingManualCount)
+      if (remainingManual <= 0) {
+        return res.status(403).json({
+          success: false,
+          error: "Manual prompt limit reached for this product",
+          limit: manualLimit,
+          currentManualPrompts: existingManualCount,
+        })
+      }
+
+      if (uniquePrompts.length > remainingManual) {
+        return res.status(403).json({
+          success: false,
+          error: "Manual prompt generation would exceed the per-product limit",
+          limit: manualLimit,
+          currentManualPrompts: existingManualCount,
+          remainingManualPrompts: remainingManual,
+          requestedPrompts: uniquePrompts.length,
+        })
+      }
+    }
+
     const tokenCost = TOKEN_COSTS.promptGeneration
     if (!req.store.canUseTokens(tokenCost)) {
       return res.status(429).json({
@@ -97,12 +144,12 @@ async function generateProductPrompts(req, res, next) {
       req.params.productId,
       req.store._id,
       req.store,
-      { prompts: req.body.prompts, manual: !!req.body.prompts?.length },
+      { prompts: req.body.prompts, manual: isManual },
     )
 
-    await req.store.deductTokens(tokenCost).catch((e) =>
-      logger.warn(`Token deduct failed: ${e.message}`),
-    )
+    await req.store
+      .deductTokens(tokenCost)
+      .catch((e) => logger.warn(`Token deduct failed: ${e.message}`))
 
     await AuditLog.create({
       storeId: req.store._id,
@@ -153,7 +200,9 @@ async function scorePrompt(req, res, next) {
       storeId: req.store._id,
     })
     if (!product)
-      return res.status(404).json({ success: false, error: "Product not found" })
+      return res
+        .status(404)
+        .json({ success: false, error: "Product not found" })
 
     const analysis = await ProductAnalysis.findOne(
       { productId: product._id },
@@ -194,6 +243,61 @@ async function getPromptFix(req, res, next) {
     if (err.message === "Prompt not found") {
       return res.status(404).json({ success: false, error: err.message })
     }
+    next(err)
+  }
+}
+
+/**
+ * GET /api/prompts/:promptId
+ * Get full prompt details including product, latest analysis and fix recommendations
+ */
+async function getPromptDetails(req, res, next) {
+  try {
+    const promptId = req.params.promptId
+    if (!promptId || !mongoose.Types.ObjectId.isValid(promptId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid prompt id",
+      })
+    }
+
+    const prompt = await ProductPrompt.findOne({
+      _id: promptId,
+      storeId: req.store._id,
+    })
+      .populate("productId", "title shopifyProductId")
+      .lean()
+
+    if (!prompt) {
+      return res.status(404).json({ success: false, error: "Prompt not found" })
+    }
+
+    const productId = prompt.productId?._id || prompt.productId
+
+    const analysis = productId
+      ? await ProductAnalysis.findOne({ productId }, null, {
+          sort: { createdAt: -1 },
+        }).lean()
+      : null
+
+    let fix = null
+    try {
+      fix = await promptWinService.getPromptFix(promptId, req.store._id)
+    } catch (e) {
+      fix = null
+    }
+
+    res.json({
+      success: true,
+      data: {
+        prompt,
+        product: prompt.productId || null,
+        analysis,
+        fix,
+        planLimits: req.store.getPromptLimits(),
+      },
+    })
+  } catch (err) {
     next(err)
   }
 }
@@ -372,6 +476,7 @@ export {
   generateProductPrompts,
   scorePrompt,
   getPromptFix,
+  getPromptDetails,
   simulatePrompt,
   analysePromptIntelligence,
   getSimulationHistory,

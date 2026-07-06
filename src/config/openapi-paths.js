@@ -514,6 +514,16 @@ const openapiPaths = {
     },
   },
 
+  "/prompts/{promptId}": {
+    get: {
+      tags: ["Prompts"],
+      summary: "Get prompt details (product context, analysis, fixes)",
+      security: bearer,
+      parameters: [promptIdPath],
+      responses: ok("Prompt details"),
+    },
+  },
+
   "/prompts/{promptId}/fix": {
     get: {
       tags: ["Prompts"],
