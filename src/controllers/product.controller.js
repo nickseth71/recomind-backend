@@ -10,6 +10,7 @@ import * as productSyncService from "../services/productsync.service.js"
 import * as promptWinService from "../services/promptwin.service.js"
 import { getPlanConfig, getPromptLimits } from "../config/plans.js"
 import * as shopifyService from "../services/shopify.service.js"
+import * as impactService from "../services/impact.service.js"
 import { getRedis } from "../config/redis.js"
 import logger from "../config/logger.js"
 import crypto from "crypto"
@@ -400,6 +401,9 @@ async function optimiseProduct(req, res, next) {
       })
     }
 
+    // Snapshot Shopify baseline metrics before pushing optimization
+    await impactService.captureProductBaseline(req.store, product)
+
     const { faqStrategy, faqs, promptId } = req.body || {}
     const optimiseOptions = { faqStrategy }
     if (faqs?.length) optimiseOptions.faqs = faqs
@@ -429,6 +433,11 @@ async function optimiseProduct(req, res, next) {
       performedBy: "user",
       ipAddress: req.ip,
     })
+
+    // Refresh post-optimization metrics from Shopify (async, non-blocking)
+    impactService
+      .recordProductPostOptimization(req.store, product, analysis.appliedAt)
+      .catch(() => {})
 
     res.json({
       success: true,

@@ -11,6 +11,7 @@ import Store from "../../models/store.model.js"
 import { TOKEN_COSTS } from "../../config/plans.js"
 import crypto from "crypto"
 import { getPromptLimits } from "../../config/plans.js"
+import startMetricsSync from "../metrics-sync.js"
 
 const QUEUE_NAME = "recomind-ai-jobs"
 const CONCURRENCY = parseInt(process.env.QUEUE_CONCURRENCY) || 3
@@ -65,6 +66,12 @@ export default async function startWorker() {
     logger.info(
       `🚀 RecoMind Worker started – queue "${QUEUE_NAME}" concurrency=${CONCURRENCY}`,
     )
+    // Start background metrics sync (recurring nightly job)
+    try {
+      await startMetricsSync()
+    } catch (err) {
+      logger.warn("Could not start metrics sync:", err.message)
+    }
     return worker
   } catch (err) {
     logger.error("Worker startup failed:", err)
