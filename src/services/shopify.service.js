@@ -329,6 +329,380 @@ async function fetchShopInfo(shop, accessToken) {
   return res.data.shop
 }
 
+const SHOPIFY_API_VERSION = "2024-01"
+
+/**
+ * Execute a GraphQL Admin API query.
+ */
+async function graphqlQuery(shop, accessToken, query, variables = {}) {
+  try {
+    const res = await axios.post(
+      `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
+      { query, variables },
+      {
+        headers: {
+          "X-Shopify-Access-Token": accessToken,
+          "Content-Type": "application/json",
+        },
+      },
+    )
+
+    if (res.data.errors?.length) {
+      throw new Error(res.data.errors.map((e) => e.message).join(", "))
+    }
+
+    return res.data.data
+  } catch (err) {
+    // Surface Shopify API HTTP errors with clearer messages and status codes
+    const status = err?.response?.status
+    if (status === 403) {
+      const e = new Error(
+        "Shopify analytics access forbidden: missing read_reports scope or insufficient permissions",
+      )
+      e.statusCode = 403
+      throw e
+    }
+    if (status === 401) {
+      const e = new Error("Shopify access token invalid or expired (401)")
+      e.statusCode = 401
+      throw e
+    }
+
+    // Pass through other errors
+    throw err
+  }
+}
+
+/**
+ * Parse ShopifyQL tableData rows into plain objects.
+ */
+function parseShopifyqlTable(tableData) {
+  if (!tableData?.rows?.length) return []
+  const columns = (tableData.columns || []).map((c) => c.name)
+  return tableData.rows.map((row) => {
+    if (row && typeof row === "object" && !Array.isArray(row)) return row
+    const obj = {}
+    columns.forEach((col, i) => {
+      obj[col] = row[col] ?? row[i]
+    })
+    return obj
+  })
+}
+
+/**
+ * Run a ShopifyQL query via the GraphQL Admin API (requires read_reports scope).
+ */
+async function shopifyqlQuery(shop, accessToken, shopifyql) {
+  const query = `
+    query RunShopifyql($query: String!) {
+      shopifyqlQuery(query: $query) {
+        tableData {
+          columns { name dataType displayName }
+          rows
+        }
+        parseErrors
+      }
+    }
+  `
+
+  const data = await graphqlQuery(shop, accessToken, query, {
+    query: shopifyql,
+  })
+  const result = data?.shopifyqlQuery
+
+  if (!result) {
+    throw new Error("ShopifyQL query returned no data")
+  }
+
+  if (result.parseErrors?.length) {
+    throw new Error(result.parseErrors.join(", "))
+  }
+
+  return parseShopifyqlTable(result.tableData)
+}
+
+function toNumber(value) {
+  const n = Number(String(value ?? "").replace(/[^0-9.-]/g, ""))
+  return Number.isFinite(n) ? n : 0
+}
+
+function formatShopifyqlDate(date) {
+  return date.toISOString().slice(0, 10)
+}
+
+/**
+ * Store-wide commerce metrics for a date range from ShopifyQL.
+ */
+async function fetchStoreMetricsForRange(
+  shop,
+  accessToken,
+  startDate,
+  endDate,
+) {
+  const since = formatShopifyqlDate(startDate)
+  const until = formatShopifyqlDate(endDate)
+  const query = `FROM sales, sessions SHOW total_sales, orders, sessions, product_views SINCE ${since} UNTIL ${until}`
+
+  try {
+    const rows = await shopifyqlQuery(shop, accessToken, query)
+    const row = rows[0] || {}
+    const orders = toNumber(row.orders)
+    const sessions = toNumber(row.sessions)
+    const views = toNumber(row.product_views)
+    const revenue = toNumber(row.total_sales)
+
+    return {
+      revenue,
+      orders,
+      sessions,
+      views,
+      traffic: sessions || views,
+      conversionRate:
+        sessions > 0 ? Math.round((orders / sessions) * 10000) / 100 : null,
+      source: "shopify",
+    }
+  } catch (err) {
+    logger.warn(`ShopifyQL store metrics failed for ${shop}:`, err.message)
+    return fetchStoreMetricsFromOrders(shop, accessToken, startDate, endDate)
+  }
+}
+
+/**
+ * Compare current period vs previous period using ShopifyQL COMPARE.
+ */
+async function fetchStoreMetricsComparison(shop, accessToken, days = 30) {
+  const query = `FROM sales, sessions SHOW total_sales, orders, sessions, product_views SINCE -${days}d COMPARE TO previous_period`
+
+  try {
+    const rows = await shopifyqlQuery(shop, accessToken, query)
+    const current =
+      rows.find((r) => r.period === "current_period") || rows[0] || {}
+    const previous =
+      rows.find((r) => r.period === "previous_period") || rows[1] || {}
+
+    const mapRow = (row) => {
+      const orders = toNumber(row.orders)
+      const sessions = toNumber(row.sessions)
+      const views = toNumber(row.product_views)
+      return {
+        revenue: toNumber(row.total_sales),
+        orders,
+        sessions,
+        views,
+        traffic: sessions || views,
+        conversionRate:
+          sessions > 0 ? Math.round((orders / sessions) * 10000) / 100 : null,
+        source: "shopify",
+      }
+    }
+
+    return {
+      current: mapRow(current),
+      previous: mapRow(previous),
+      source: "shopify",
+    }
+  } catch (err) {
+    logger.warn(`ShopifyQL comparison failed for ${shop}:`, err.message)
+    const end = new Date()
+    const start = new Date(end)
+    start.setDate(start.getDate() - days)
+    const prevEnd = new Date(start)
+    prevEnd.setDate(prevEnd.getDate() - 1)
+    const prevStart = new Date(prevEnd)
+    prevStart.setDate(prevStart.getDate() - days)
+
+    const [current, previous] = await Promise.all([
+      fetchStoreMetricsFromOrders(shop, accessToken, start, end),
+      fetchStoreMetricsFromOrders(shop, accessToken, prevStart, prevEnd),
+    ])
+
+    return { current, previous, source: "shopify_orders" }
+  }
+}
+
+/**
+ * Per-product sales metrics grouped by product title (ShopifyQL).
+ */
+async function fetchProductSalesMetrics(shop, accessToken, startDate, endDate) {
+  const since = formatShopifyqlDate(startDate)
+  const until = formatShopifyqlDate(endDate)
+  const query = `FROM sales SHOW total_sales, orders GROUP BY product_title SINCE ${since} UNTIL ${until} ORDER BY total_sales DESC LIMIT 250`
+
+  try {
+    const rows = await shopifyqlQuery(shop, accessToken, query)
+    const byTitle = {}
+    for (const row of rows) {
+      const title = row.product_title
+      if (!title) continue
+      byTitle[title.toLowerCase()] = {
+        title,
+        revenue: toNumber(row.total_sales),
+        orders: toNumber(row.orders),
+        source: "shopify",
+      }
+    }
+    return byTitle
+  } catch (err) {
+    logger.warn(`ShopifyQL product sales failed for ${shop}:`, err.message)
+    return fetchProductSalesFromOrders(shop, accessToken, startDate, endDate)
+  }
+}
+
+/**
+ * Per-product session funnel metrics (traffic, views, conversions).
+ */
+async function fetchProductSessionMetrics(
+  shop,
+  accessToken,
+  startDate,
+  endDate,
+) {
+  const since = formatShopifyqlDate(startDate)
+  const until = formatShopifyqlDate(endDate)
+  const query = `FROM sessions SHOW sessions, product_views, add_to_carts, checkouts, orders GROUP BY product_title SINCE ${since} UNTIL ${until} ORDER BY sessions DESC LIMIT 250`
+
+  try {
+    const rows = await shopifyqlQuery(shop, accessToken, query)
+    const byTitle = {}
+    for (const row of rows) {
+      const title = row.product_title
+      if (!title) continue
+      const sessions = toNumber(row.sessions)
+      const orders = toNumber(row.orders)
+      byTitle[title.toLowerCase()] = {
+        title,
+        sessions,
+        views: toNumber(row.product_views),
+        addToCarts: toNumber(row.add_to_carts),
+        checkouts: toNumber(row.checkouts),
+        orders,
+        traffic: sessions || toNumber(row.product_views),
+        conversionRate:
+          sessions > 0 ? Math.round((orders / sessions) * 10000) / 100 : null,
+        source: "shopify",
+      }
+    }
+    return byTitle
+  } catch (err) {
+    logger.warn(`ShopifyQL product sessions failed for ${shop}:`, err.message)
+    return {}
+  }
+}
+
+/**
+ * Aggregate order line items by Shopify product ID (read_orders fallback).
+ */
+async function fetchOrdersInRange(shop, accessToken, startDate, endDate) {
+  let url = `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/orders.json?status=any&limit=250&fields=id,created_at,line_items,financial_status`
+  if (startDate) url += `&created_at_min=${startDate.toISOString()}`
+  if (endDate) url += `&created_at_max=${endDate.toISOString()}`
+
+  const orders = []
+  try {
+    while (url) {
+      const res = await axios.get(url, {
+        headers: { "X-Shopify-Access-Token": accessToken },
+      })
+      orders.push(...(res.data.orders || []))
+
+      const linkHeader = res.headers.link
+      url = null
+      if (linkHeader) {
+        const nextMatch = linkHeader.match(/<([^>]+)>;\s*rel="next"/)
+        if (nextMatch) url = nextMatch[1]
+      }
+    }
+  } catch (err) {
+    const status = err?.response?.status
+    // Provide clearer error messages for common Shopify API issues
+    if (status === 403) {
+      const e = new Error(
+        "Shopify API access forbidden: access token lacks required scopes (e.g., read_orders) or permissions",
+      )
+      e.statusCode = 403
+      e.response = err.response
+      throw e
+    }
+    if (status === 401) {
+      const e = new Error(
+        "Shopify API unauthorized: access token invalid or expired",
+      )
+      e.statusCode = 401
+      e.response = err.response
+      throw e
+    }
+
+    throw err
+  }
+
+  return orders
+}
+
+async function fetchStoreMetricsFromOrders(
+  shop,
+  accessToken,
+  startDate,
+  endDate,
+) {
+  const orders = await fetchOrdersInRange(shop, accessToken, startDate, endDate)
+  let revenue = 0
+  let orderCount = 0
+
+  for (const order of orders) {
+    if (["voided", "refunded"].includes(order.financial_status)) continue
+    orderCount += 1
+    for (const item of order.line_items || []) {
+      revenue += toNumber(item.price) * toNumber(item.quantity)
+    }
+  }
+
+  return {
+    revenue: Math.round(revenue * 100) / 100,
+    orders: orderCount,
+    sessions: null,
+    views: null,
+    traffic: null,
+    conversionRate: null,
+    source: "shopify_orders",
+  }
+}
+
+async function fetchProductSalesFromOrders(
+  shop,
+  accessToken,
+  startDate,
+  endDate,
+) {
+  const orders = await fetchOrdersInRange(shop, accessToken, startDate, endDate)
+  const byProductId = {}
+
+  for (const order of orders) {
+    if (["voided", "refunded"].includes(order.financial_status)) continue
+    for (const item of order.line_items || []) {
+      const productId = String(item.product_id)
+      if (!productId) continue
+      if (!byProductId[productId]) {
+        byProductId[productId] = {
+          shopifyProductId: productId,
+          title: item.title,
+          revenue: 0,
+          orders: 0,
+          source: "shopify_orders",
+        }
+      }
+      byProductId[productId].orders += 1
+      byProductId[productId].revenue +=
+        toNumber(item.price) * toNumber(item.quantity)
+    }
+  }
+
+  for (const entry of Object.values(byProductId)) {
+    entry.revenue = Math.round(entry.revenue * 100) / 100
+  }
+
+  return byProductId
+}
+
 /**
  * Register a webhook with Shopify.
  */
@@ -371,5 +745,12 @@ export {
   updateProduct,
   fetchShopInfo,
   registerWebhook,
+  graphqlQuery,
+  shopifyqlQuery,
+  fetchStoreMetricsForRange,
+  fetchStoreMetricsComparison,
+  fetchProductSalesMetrics,
+  fetchProductSessionMetrics,
+  fetchProductSalesFromOrders,
   RECOMIND_METAFIELD_NAMESPACE,
 }

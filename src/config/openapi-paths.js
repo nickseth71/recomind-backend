@@ -212,6 +212,81 @@ const openapiPaths = {
     },
   },
 
+  "/impact": {
+    get: {
+      tags: ["Impact"],
+      summary:
+        "Impact dashboard — combined summary, products, and opportunities",
+      security: bearer,
+      parameters: [
+        {
+          name: "windowDays",
+          in: "query",
+          schema: { type: "integer", default: 7 },
+        },
+      ],
+      responses: ok("Impact dashboard data"),
+    },
+  },
+
+  "/impact/summary": {
+    get: {
+      tags: ["Impact"],
+      summary: "Store-level before/after performance summary",
+      security: bearer,
+      parameters: [
+        {
+          name: "windowDays",
+          in: "query",
+          schema: { type: "integer", default: 7 },
+        },
+      ],
+      responses: ok("Impact summary"),
+    },
+  },
+
+  "/impact/products": {
+    get: {
+      tags: ["Impact"],
+      summary: "Per-product before/after metrics table",
+      security: bearer,
+      parameters: [
+        {
+          name: "windowDays",
+          in: "query",
+          schema: { type: "integer", default: 7 },
+        },
+        {
+          name: "limit",
+          in: "query",
+          schema: { type: "integer", default: 20 },
+        },
+      ],
+      responses: ok("Product impact list"),
+    },
+  },
+
+  "/impact/opportunities": {
+    get: {
+      tags: ["Impact"],
+      summary: "Top intent/fix opportunities with Shopify performance gains",
+      security: bearer,
+      parameters: [
+        {
+          name: "windowDays",
+          in: "query",
+          schema: { type: "integer", default: 7 },
+        },
+        {
+          name: "limit",
+          in: "query",
+          schema: { type: "integer", default: 10 },
+        },
+      ],
+      responses: ok("Opportunities list"),
+    },
+  },
+
   "/products/analyse-bulk": {
     post: {
       tags: ["Products"],

@@ -15,6 +15,7 @@ import authRoutes from "./routes/auth.routes.js"
 import productRoutes from "./routes/product.routes.js"
 import promptRoutes from "./routes/prompt.routes.js"
 import reportRoutes from "./routes/report.routes.js"
+import impactRoutes from "./routes/impact.routes.js"
 import webhookRoutes from "./routes/webhook.routes.js"
 import adminRoutes from "./routes/admin.routes.js"
 
@@ -50,6 +51,7 @@ app.use("/recomind/v1/stores", authRoutes) // POST /v1/stores  ← called by aft
 app.use("/recomind/v1/products", productRoutes)
 app.use("/recomind/v1/prompts", promptRoutes)
 app.use("/recomind/v1/reports", reportRoutes)
+app.use("/recomind/v1/impact", impactRoutes)
 app.use("/recomind/v1/admin", adminRoutes)
 
 app.get("/v1/health", (req, res) => {
