@@ -1,5 +1,8 @@
 import Store from "../models/store.model.js"
 import AuditLog from "../models/auditlog.model.js"
+import Product from "../models/product.model.js"
+import ProductPrompt from "../models/product-prompt.model.js"
+import ProductAnalysis from "../models/product-analysis.mode.js"
 import * as shopifyService from "../services/shopify.service.js"
 import * as productSyncService from "../services/productsync.service.js"
 import { getPlanConfig, getAllPlans, getAllAddons } from "../config/plans.js"
@@ -250,4 +253,134 @@ async function listPlans(req, res) {
   })
 }
 
-export { registerStore, getMe, getStoreToken, updateStoreSettings, listPlans }
+/**
+ * GET /api/stores/billing
+ * Returns store billing info, usage stats, and key metrics.
+ */
+async function getStoreBillingInfo(req, res, next) {
+  try {
+    const store = req.store
+    store.resetMonthlyQuotaIfNeeded()
+
+    const storeId = store._id
+
+    // ─── Parallel queries for usage metrics ──────────────────────────
+    const [
+      totalProducts,
+      optimizedProducts,
+      analyzedProducts,
+      totalPrompts,
+      highVisibilityPrompts,
+    ] = await Promise.all([
+      Product.countDocuments({ storeId }),
+      Product.countDocuments({ storeId, isOptimized: true }),
+      ProductAnalysis.countDocuments({ storeId }),
+      ProductPrompt.countDocuments({ storeId }),
+      ProductPrompt.countDocuments({ storeId, visibility: "HIGH" }),
+    ])
+
+    // Prompt generation counts
+    const promptCounts = store.usage || {
+      productsAnalyzed: 0,
+      manualPromptsGenerated: 0,
+      autoPromptsGenerated: 0,
+    }
+
+    // Calculate next billing date
+    const nextBillingDate = store.planExpiresAt
+      ? new Date(store.planExpiresAt)
+      : null
+    const daysUntilExpiry = nextBillingDate
+      ? Math.ceil(
+          (nextBillingDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24),
+        )
+      : null
+
+    const planConfig = getPlanConfig(store.plan)
+    const planLimits = store.getPromptLimits()
+
+    res.json({
+      success: true,
+      data: {
+        // ─── Billing & Plan ──────────────────────────────────────────
+        plan: {
+          name: store.plan,
+          label: planConfig.label,
+          tagline: planConfig.tagline,
+          expiresAt: nextBillingDate,
+          daysUntilExpiry: daysUntilExpiry,
+          isExpired: daysUntilExpiry !== null && daysUntilExpiry < 0,
+        },
+
+        // ─── Token Quota ─────────────────────────────────────────────
+        tokenQuota: {
+          monthly: store.monthlyTokenQuota,
+          used: store.tokensUsedThisMonth,
+          remaining: store.getRemainingTokens(),
+          percentUsed: Math.round(
+            ((store.tokensUsedThisMonth || 0) /
+              (store.monthlyTokenQuota || 1)) *
+              100,
+          ),
+          resetDate: store.tokenQuotaResetDate,
+          lifetime: store.lifetimeTokensUsed,
+        },
+
+        // ─── Products & Analysis ────────────────────────────────────
+        products: {
+          total: totalProducts,
+          analyzed: analyzedProducts,
+          optimized: optimizedProducts,
+          notOptimized: totalProducts - optimizedProducts,
+          nextSyncScheduled: store.lastSyncedAt
+            ? new Date(
+                new Date(store.lastSyncedAt).getTime() + 24 * 60 * 60 * 1000,
+              )
+            : null,
+          lastSyncedAt: store.lastSyncedAt,
+        },
+
+        // ─── Prompts & Intelligence ─────────────────────────────────
+        prompts: {
+          total: totalPrompts,
+          highVisibility: highVisibilityPrompts,
+          manual: promptCounts.manualPromptsGenerated || 0,
+          auto: promptCounts.autoPromptsGenerated || 0,
+          limits: {
+            maxPerProduct: planLimits.promptsPerProduct,
+            maxPromptsPerBatch: planLimits.maxPromptsPerBatch,
+          },
+        },
+
+        // ─── Usage Tracking ─────────────────────────────────────────
+        usage: {
+          productsAnalyzed: promptCounts.productsAnalyzed || 0,
+          maxProductsAnalyzed: planLimits.maxProductsAnalyzed,
+          canAnalyzeMore:
+            promptCounts.productsAnalyzed < planLimits.maxProductsAnalyzed,
+        },
+
+        // ─── Account ────────────────────────────────────────────────
+        account: {
+          shopDomain: store.shopDomain,
+          shopName: store.shopName,
+          currency: store.currency,
+          timezone: store.timezone,
+          installedAt: store.installedAt,
+          isActive: store.isActive,
+        },
+      },
+    })
+  } catch (err) {
+    next(err)
+  }
+}
+
+export {
+  registerStore,
+  getMe,
+  getStoreToken,
+  updateStoreSettings,
+  listPlans,
+  getStoreBillingInfo,
+}

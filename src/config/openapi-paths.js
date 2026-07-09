@@ -118,6 +118,17 @@ const openapiPaths = {
     },
   },
 
+  "/stores/billing": {
+    get: {
+      tags: ["Stores"],
+      summary: "Get store billing, usage, and key metrics",
+      description:
+        "Returns comprehensive store information including current plan, next billing date, product analysis stats, prompt generation counts, and token usage.",
+      security: bearer,
+      responses: ok("Store billing and usage information"),
+    },
+  },
+
   "/stores/plans": {
     get: {
       tags: ["Stores"],
