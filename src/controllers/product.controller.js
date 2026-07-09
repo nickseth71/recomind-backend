@@ -774,7 +774,7 @@ async function getDashboardStats(req, res, next) {
       totalFixes: (a.prioritizedFixes || []).length,
     }))
 
-    // ── Prompt Win (feature-gated, unchanged) ─────────────────────────
+    // ── Prompt Win (feature-gated, limit to 5 per category) ──────────
     let promptWin = null
     if (req.store.hasFeature("promptWinDashboard")) {
       try {
@@ -783,34 +783,36 @@ async function getDashboardStats(req, res, next) {
           req.store,
         )
         if (raw) {
-          const slim = (items = []) =>
-            items.map(
-              ({
-                _id,
-                productId,
-                prompt,
-                buyerIntent,
-                missingSignals,
-                intentCoverageScore,
-                visibility,
-              }) => ({
-                _id,
-                productId: productId
-                  ? { _id: productId._id, title: productId.title }
-                  : null,
-                prompt,
-                buyerIntent,
-                missingSignals,
-                intentCoverageScore,
-                visibility,
-              }),
-            )
+          const slim = (items = [], limit = 5) =>
+            items
+              .slice(0, limit)
+              .map(
+                ({
+                  _id,
+                  productId,
+                  prompt,
+                  buyerIntent,
+                  missingSignals,
+                  intentCoverageScore,
+                  visibility,
+                }) => ({
+                  _id,
+                  productId: productId
+                    ? { _id: productId._id, title: productId.title }
+                    : null,
+                  prompt,
+                  buyerIntent,
+                  missingSignals,
+                  intentCoverageScore,
+                  visibility,
+                }),
+              )
           promptWin = {
             summary: raw.summary,
             visibilityCounts: raw.visibilityCounts,
-            topMissing: slim(raw.topMissing),
-            topImprove: slim(raw.topImprove),
-            topWinning: slim(raw.topWinning),
+            topMissing: slim(raw.topMissing, 5),
+            topImprove: slim(raw.topImprove, 5),
+            topWinning: slim(raw.topWinning, 5),
             planLimits: raw.planLimits,
           }
         }
