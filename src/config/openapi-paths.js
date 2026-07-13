@@ -469,6 +469,18 @@ const openapiPaths = {
           schema: { type: "string" },
           description: "Optional filter by product",
         },
+        {
+          name: "search",
+          in: "query",
+          schema: { type: "string" },
+          description: "Optional search term to filter prompts by text",
+        },
+        {
+          name: "searchLimit",
+          in: "query",
+          schema: { type: "integer", default: 20, maximum: 50 },
+          description: "Max results in searchResults when search is used",
+        },
       ],
       responses: ok("Prompt win summary"),
     },

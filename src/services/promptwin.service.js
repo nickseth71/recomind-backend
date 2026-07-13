@@ -423,6 +423,12 @@ async function getPromptWinDashboard(storeId, store, filters = {}) {
   const match = { storeId, isTracked: true }
   if (filters.productId) match.productId = filters.productId
 
+  // text search filter
+  if (filters.search && filters.search.trim()) {
+    const escaped = filters.search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    match.prompt = { $regex: escaped, $options: "i" }
+  }
+
   const [
     counts,
     topMissing,
@@ -430,6 +436,7 @@ async function getPromptWinDashboard(storeId, store, filters = {}) {
     recentPrompts,
     trackedCount,
     topImprove,
+    searchResults,
   ] = await Promise.all([
     ProductPrompt.aggregate([
       { $match: match },
@@ -456,6 +463,14 @@ async function getPromptWinDashboard(storeId, store, filters = {}) {
       .limit(10)
       .populate("productId", "title")
       .lean(),
+    // only run a dedicated search query when a search term is present
+    filters.search && filters.search.trim()
+      ? ProductPrompt.find(match)
+          .sort({ intentCoverageScore: -1 })
+          .limit(filters.searchLimit || 20)
+          .populate("productId", "title")
+          .lean()
+      : Promise.resolve(null),
   ])
 
   const visibilityCounts = { HIGH: 0, MEDIUM: 0, LOW: 0 }
@@ -476,6 +491,7 @@ async function getPromptWinDashboard(storeId, store, filters = {}) {
     topImprove,
     topWinning,
     recentPrompts,
+    searchResults, // null unless `search` filter was passed
     planLimits: {
       ...limits,
       trackedCount,

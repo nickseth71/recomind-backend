@@ -27,7 +27,13 @@ async function getWinDashboard(req, res, next) {
     const data = await promptWinService.getPromptWinDashboard(
       req.store._id,
       req.store,
-      { productId: req.query.productId },
+      {
+        productId: req.query.productId,
+        search: req.query.search, // NEW
+        searchLimit: req.query.searchLimit
+          ? Math.min(Number(req.query.searchLimit), 50) // cap to avoid abuse
+          : undefined,
+      },
     )
 
     res.json({ success: true, data })
