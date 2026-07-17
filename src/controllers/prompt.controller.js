@@ -356,6 +356,7 @@ async function simulatePrompt(req, res, next) {
       prompt,
       product,
       latestAnalysis,
+      req.store,
     )
 
     await req.store.deductTokens(TOKEN_COSTS.promptSimulation).catch(() => {})
@@ -375,6 +376,7 @@ async function simulatePrompt(req, res, next) {
       semanticGaps: result.semanticGaps || [],
       recommendations: result.recommendations || [],
       rawAiResponse: result.rawAiResponse,
+      marketContext: result.marketContext || null,
     })
 
     await AuditLog.create({

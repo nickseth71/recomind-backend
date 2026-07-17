@@ -113,11 +113,12 @@ function buildPromptInsights(result = {}, analysis = {}) {
  * Score a single prompt against a product using AI intent decomposition.
  * Accepts existingAnalysis so interpretation context is always passed through.
  */
-async function scorePromptForProduct(prompt, product, analysis) {
+async function scorePromptForProduct(prompt, product, analysis, store = null) {
   const result = await aiService.scorePromptVisibility(
     prompt,
     product,
     analysis,
+    store || null,
   )
 
   const score = result.intentCoverageScore ?? result.recommendationScore ?? 0
@@ -270,6 +271,7 @@ async function generateAndScorePrompts(
         chunk,
         product,
         analysis,
+        store || null,
       )
       allScored.push(
         ...batchResults.map((r, idx) => {

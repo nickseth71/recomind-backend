@@ -5,6 +5,7 @@ import ProductPrompt from "../models/product-prompt.model.js"
 import ProductAnalysis from "../models/product-analysis.mode.js"
 import * as shopifyService from "../services/shopify.service.js"
 import * as productSyncService from "../services/productsync.service.js"
+import * as marketSyncService from "../services/marketsync.service.js"
 import { getPlanConfig, getAllPlans, getAllAddons } from "../config/plans.js"
 import { signToken } from "../middleware/auth.js"
 import logger from "../config/logger.js"
@@ -71,6 +72,11 @@ async function registerStore(req, res, next) {
     store.timezone = shopInfo.iana_timezone
     store.isActive = true
     store.uninstalledAt = undefined
+    store.region.country = shopInfo.country_name
+    store.region.countryCode = shopInfo.country_code
+    store.region.province = shopInfo.province
+    store.region.provinceCode = shopInfo.province_code
+    store.region.updatedAt = shopInfo.updated_at
 
     await store.save()
     logger.info(`Store ${isNew ? "created" : "updated"}: ${shop}`)
@@ -81,6 +87,7 @@ async function registerStore(req, res, next) {
       "products/update",
       "products/delete",
       "app/uninstalled",
+      "markets/update",
     ]
     await Promise.allSettled(
       topics.map((topic) =>
@@ -95,15 +102,21 @@ async function registerStore(req, res, next) {
       logger.error(err?.stack)
     })
 
+     marketSyncService.syncStoreMarkets(store).catch((err) => {
+       logger.warn(`Initial market sync failed for ${shop}: ${err.message}`)
+     })
+
     // Audit log
-    await AuditLog.create({
-      storeId: store._id,
-      action: "STORE_INSTALLED",
-      entityType: "store",
-      entityId: store._id,
-      metadata: { isNew, shopName: shopInfo.name },
-      performedBy: "afterAuth",
-    })
+    if (isNew || store.isActive !== true) {
+      await AuditLog.create({
+        storeId: store._id,
+        action: "STORE_INSTALLED",
+        entityType: "store",
+        entityId: store._id,
+        metadata: { isNew, shopName: shopInfo.name },
+        performedBy: "afterAuth",
+      })
+    }
 
     // Issue JWT
     const token = signToken(store._id, shop, store.plan)

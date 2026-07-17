@@ -112,7 +112,7 @@ async function getProduct(req, res, next) {
   try {
     const product = await Product.findOne(
       { _id: req.params.id, storeId: req.store._id },
-      "title productType vendor isOptimized images",
+      "title description descriptionHtml tags existingFaqs hasFaqSection productType vendor isOptimized images",
     ).lean()
     if (!product)
       return res
@@ -124,7 +124,7 @@ async function getProduct(req, res, next) {
 
     const latestAnalysis = await ProductAnalysis.findOne(
       { productId: product._id },
-      "score scoreBreakdown reasoning engineCoverage bestFor intentKeywords intentClusters missingSignals comparisonOpportunities trustSignals prioritizedFixes faq faqAnalysis smartPrompts interpretation competitorBenchmark",
+      "score scoreBreakdown reasoning engineCoverage bestFor intentKeywords intentClusters missingSignals comparisonOpportunities trustSignals prioritizedFixes faq existingFaqs faqAnalysis smartPrompts interpretation competitorBenchmark optimizedTitle optimizedDescription",
       { sort: { createdAt: -1 } },
     ).lean()
 
@@ -199,44 +199,48 @@ async function analyseProduct(req, res, next) {
       })
     }
 
-    if (product.analyzationCount >= maxProductReAnalyzation) {
-      return res.status(404).json({
-        success: false,
-        message: "Your analyzation limit has reached for this product",
-      })
-    }
+    const currentAnalysisCount = product.analyzationCount || 0
+    const reAnalyzeLimit =
+      Number.isFinite(maxProductReAnalyzation) &&
+      maxProductReAnalyzation !== null
+        ? maxProductReAnalyzation
+        : Infinity
 
-    // Generate current product hash
-    const currentHash = generateProductHash(product)
-
-    // Check if product has changed since last analysis
-    const hasProductChanged =
-      !product.lastAnalysedProductHash ||
-      product.lastAnalysedProductHash !== currentHash
-
-    // If product hasn't changed and has existing analysis, return it
-    if (!hasProductChanged && product.lastAnalysedAt) {
-      const existingAnalysis = await ProductAnalysis.findOne(
+    if (reAnalyzeLimit !== Infinity && currentAnalysisCount >= reAnalyzeLimit) {
+      const previousAnalysis = await ProductAnalysis.findOne(
         { productId: product._id },
-        null,
+        "score scoreBreakdown reasoning engineCoverage bestFor intentKeywords intentClusters missingSignals comparisonOpportunities trustSignals prioritizedFixes faq existingFaqs faqAnalysis smartPrompts interpretation competitorBenchmark optimizedTitle optimizedDescription",
         { sort: { createdAt: -1 } },
       ).lean()
 
-      if (existingAnalysis) {
+      if (previousAnalysis) {
         return res.json({
           success: true,
-          message: "Product analysis up to date (no changes detected)",
+          message:
+            "Re-analysis limit reached — returning the latest saved analysis",
           data: {
             jobId: null,
             productId: product._id,
             usingCached: true,
-            analysis: existingAnalysis,
+            analysis: previousAnalysis,
           },
         })
       }
+
+      return res.status(403).json({
+        success: false,
+        message: "Re-analysis limit reached for this product on your plan",
+      })
     }
 
-    // Product has changed or no previous analysis - queue fresh analysis
+    // Manual analysis requests should always trigger a fresh run while the
+    // product is still within the plan's re-analysis allowance.
+    const currentHash = generateProductHash(product)
+    const hasProductChanged =
+      !product.lastAnalysedProductHash ||
+      product.lastAnalysedProductHash !== currentHash
+
+    // Queue fresh analysis for initial runs and explicit re-analysis requests.
     const jobId = await enqueueAnalysis(product._id, req.store._id)
 
     // Update the product hash to mark it as queued for analysis
@@ -346,16 +350,15 @@ async function getCompetitorBenchmark(req, res, next) {
       { sort: { createdAt: -1 } },
     ).lean()
 
-    if (!latestAnalysis)
-      return res.status(404).json({
-        success: false,
-        error:
-          "No analysis available for this product. Run product analysis first.",
-      })
-
     const planLimits = req.store.getPromptLimits()
     const competitorCount = planLimits.competitorCount || 0
     const enabled = competitorCount > 0
+    const hasBenchmark = Boolean(latestAnalysis?.competitorBenchmark)
+    const message = latestAnalysis
+      ? hasBenchmark
+        ? null
+        : "No competitor benchmark is available for this product yet."
+      : "No analysis available for this product. Run product analysis first."
 
     res.json({
       success: true,
@@ -363,9 +366,12 @@ async function getCompetitorBenchmark(req, res, next) {
         enabled,
         competitorCount,
         competitorBenchmark: enabled
-          ? latestAnalysis.competitorBenchmark || null
+          ? latestAnalysis?.competitorBenchmark || null
           : null,
         plan: req.store.plan,
+        hasAnalysis: Boolean(latestAnalysis),
+        hasBenchmark,
+        message,
       },
     })
   } catch (err) {
@@ -379,6 +385,8 @@ async function getCompetitorBenchmark(req, res, next) {
  */
 async function optimiseProduct(req, res, next) {
   try {
+    const store = await Store.findById(req.store._id)
+    console.log("accessToken from updateProduct:", store.accessToken)
     const product = await Product.findOne({
       _id: req.params.id,
       storeId: req.store._id,
@@ -401,8 +409,15 @@ async function optimiseProduct(req, res, next) {
       })
     }
 
-    // Snapshot Shopify baseline metrics before pushing optimization
-    await impactService.captureProductBaseline(req.store, product)
+    // Snapshot Shopify baseline metrics before pushing optimization.
+    // This is best-effort and must not prevent the product update from succeeding.
+    try {
+      await impactService.captureProductBaseline(req.store, product)
+    } catch (err) {
+      logger.warn(
+        `Baseline metrics capture skipped for product ${product._id}: ${err.message}`,
+      )
+    }
 
     const { faqStrategy, faqs, promptId } = req.body || {}
     const optimiseOptions = { faqStrategy }
@@ -434,10 +449,15 @@ async function optimiseProduct(req, res, next) {
       ipAddress: req.ip,
     })
 
-    // Refresh post-optimization metrics from Shopify (async, non-blocking)
+    // Refresh post-optimization metrics from Shopify (async, non-blocking).
+    // Do not let analytics failures break the successful optimization response.
     impactService
       .recordProductPostOptimization(req.store, product, analysis.appliedAt)
-      .catch(() => {})
+      .catch((err) => {
+        logger.warn(
+          `Post-optimization metrics refresh failed for product ${product._id}: ${err.message}`,
+        )
+      })
 
     res.json({
       success: true,

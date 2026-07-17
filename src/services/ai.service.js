@@ -840,11 +840,83 @@ function cleanDescription(product, maxChars = 1500) {
     .slice(0, maxChars)
 }
 
+function buildStoreMarketContext(store = null) {
+  const enabledMarkets = Array.isArray(store?.markets)
+    ? store.markets.filter((market) => market?.enabled || market?.primary)
+    : []
+
+  const normalizedMarkets = enabledMarkets.map((market) => ({
+    name: market?.name || market?.marketId || "Market",
+    marketId: market?.marketId || null,
+    primary: Boolean(market?.primary),
+    enabled: Boolean(market?.enabled || market?.primary),
+    regions: Array.isArray(market?.regions)
+      ? market.regions
+          .map((region) => region?.code || region?.name)
+          .filter(Boolean)
+      : [],
+  }))
+
+  const fallbackRegion = store?.region
+    ? [store.region.country, store.region.countryCode]
+        .filter(Boolean)
+        .join(" ") || "Store region"
+    : null
+
+  const marketList = normalizedMarkets.length
+    ? normalizedMarkets
+    : fallbackRegion
+      ? [
+          {
+            name: fallbackRegion,
+            marketId: null,
+            primary: true,
+            enabled: true,
+            regions: [],
+          },
+        ]
+      : []
+
+  const marketSummary = marketList.length
+    ? marketList
+        .map((market) => {
+          const regionText = market.regions.length
+            ? ` (${market.regions.join(",")})`
+            : ""
+          return `${market.name}${regionText}`
+        })
+        .join(", ")
+    : "No enabled markets"
+
+  const promptText = marketList.length
+    ? `MARKET CONTEXT: This store serves the following enabled markets: ${marketSummary}. When generating analysis, prompts, and recommendations, tailor buyer intent, use cases, keyword choices, and visibility guidance for these markets. Prioritize the primary market first, and mention region-specific differences where relevant.`
+    : "MARKET CONTEXT: No enabled markets are configured for this store. Keep the analysis general and region-neutral."
+
+  return {
+    promptText,
+    marketSummary,
+    markets: marketList,
+    hasMarkets: marketList.length > 0,
+  }
+}
+
+function buildDefaultMarketVisibility(
+  marketContext,
+  fallbackVisibility = "LOW",
+) {
+  if (!marketContext?.markets?.length) return {}
+
+  return marketContext.markets.reduce((acc, market) => {
+    acc[market.name] = fallbackVisibility
+    return acc
+  }, {})
+}
+
 // ─────────────────────────────────────────────────────────────
 // STAGE 1 — PRODUCT INTERPRETER
 // ─────────────────────────────────────────────────────────────
 
-async function interpretProduct(product, competitorCount = 0) {
+async function interpretProduct(product, competitorCount = 0, store = null) {
   const systemPrompt = `You are a deep product intelligence engine for e-commerce. Your job is NOT to restate product information — it is to INTERPRET what a product truly is, who actually buys it, why they buy it, what objections they have, and what attributes matter for AI recommendation engines.
 
 You must reason like a senior product analyst who has seen thousands of products. Use all available signals — not just the description, but also tags, variants, vendor, collections, pricing, and any review signals — to build a rich semantic understanding of the product.
@@ -861,10 +933,18 @@ Respond ONLY with a valid JSON object. No markdown, no code fences.`
   const pricingContext = buildPricingContext(product)
   const competitorInstruction =
     competitorCount > 0
-      ? `"directCompetitors": ["Return EXACTLY ${competitorCount} competitor brand or product names that AI engines compare this against the current product. Fill any remaining slots with category-level alternatives to reach exactly ${competitorCount}."]`
+      ? `"directCompetitors": ["Return EXACTLY ${competitorCount} competitor brand or product names that AI engines compare this against the current product. Use only brands that are relevant to the store's active market(s) and similar in scale, pricing, and market maturity to the merchant's store. Avoid giant marketplace leaders or much larger incumbents unless they are truly comparable. Prefer peer brands that are at the same level or only 1–2 levels above the merchant's store, and never include much smaller or much less established brands as primary competitors."]`
       : `"directCompetitors": []`
+  const marketContext = buildStoreMarketContext(store)
 
   const userPrompt = `Interpret this product deeply. Do not just describe it — UNDERSTAND it.
+
+IMPORTANT COMPETITOR RULES:
+- Pick competitors from the same market or region the store serves.
+- Choose brands/products that are similar in size, brand maturity, pricing, and audience level.
+- Prefer same-level peers or brands only 1–2 levels above the merchant's store.
+- Do NOT compare against very large, dominant, enterprise-scale brands unless they are genuinely in the same category and market tier.
+- Avoid low-tier or much smaller brands as primary competitors.
 
 PRODUCT DATA:
 Title: ${product.title}
@@ -879,6 +959,8 @@ ${cleanDescription(product, 1500) || "Not provided"}
 ${variantSignals ? `Variants / Options:\n${variantSignals}` : ""}
 ${reviewSignals ? `Review Signals:\n${reviewSignals}` : ""}
 ${product.existingFaqs?.length ? `Existing FAQs:\n${product.existingFaqs.map((f) => `Q: ${f.question}\nA: ${f.answer}`).join("\n")}` : ""}
+
+${marketContext.promptText}
 
 Return this exact JSON structure:
 {
@@ -962,10 +1044,12 @@ async function analyseProduct(product, storeId) {
   const limits = getPromptLimits(store.plan, store.addons || {})
   const competitorCount = limits.competitorCount || 0
 
+  const marketContext = buildStoreMarketContext(store)
+
   logger.info(
     `[RecoMind] Interpreting product: ${product.title} (competitors: ${competitorCount})`,
   )
-  const interpretation = await interpretProduct(product, competitorCount)
+  const interpretation = await interpretProduct(product, competitorCount, store)
 
   logger.info(`[RecoMind] Generating smart prompts for: ${product.title}`)
   const smartPrompts = await generateSmartPrompts(
@@ -974,6 +1058,7 @@ async function analyseProduct(product, storeId) {
     storeId,
     true,
     competitorCount,
+    store,
   )
 
   logger.info(`[RecoMind] Running AI readiness analysis for: ${product.title}`)
@@ -1017,6 +1102,8 @@ Direct Competitors: ${(interpretation.competitiveContext?.directCompetitors || [
 
 FAQ CONTEXT:
 ${faqContext}
+
+${marketContext.promptText}
 
 SMART PROMPTS (Stage 3 output, top 8):
 ${(smartPrompts.prompts || [])
@@ -1103,6 +1190,7 @@ Return this exact JSON:
       smartPrompts,
       score: Math.min(100, Math.max(0, Math.round(totalScore))),
       rawAiResponse: raw,
+      marketContext,
     }
   } catch (err) {
     logger.error("AI product analysis failed:", err.message)
@@ -1120,15 +1208,16 @@ async function generateSmartPrompts(
   storeId,
   autoGenerate = false,
   competitorCount = 0,
+  store = null,
 ) {
-  const store = await Store.findById(storeId)
-  const limits = getPromptLimits(store.plan, store.addons || {})
+  const storeDoc = store || (await Store.findById(storeId))
+  const limits = getPromptLimits(storeDoc.plan, storeDoc.addons || {})
   const promptLimit = autoGenerate
     ? limits.promptsPerProduct
     : limits.manualPromptsPerProduct
 
   logger.info(
-    `[RecoMind] Smart prompt limit: ${promptLimit}, plan: ${store.plan}`,
+    `[RecoMind] Smart prompt limit: ${promptLimit}, plan: ${storeDoc.plan}`,
   )
 
   const systemPrompt = `You are an AI shopping behavior analyst who specialises in understanding how real consumers search for and discover products using AI assistants like ChatGPT, Perplexity, and Gemini.
@@ -1156,6 +1245,7 @@ Respond ONLY with valid JSON. No markdown.`
     0,
     competitorCount,
   )
+  const marketContext = buildStoreMarketContext(storeDoc)
 
   const userPrompt = `Generate smart AI shopping prompts for this specific product.
 
@@ -1174,6 +1264,8 @@ Inferred Attributes: ${(semantics.inferredAttributes || []).map((a) => a.attribu
 Missing Critical Attributes: ${(semantics.missingCriticalAttributes || []).join(", ")}
 Direct Competitors: ${trimmedCompetitors.length > 0 ? trimmedCompetitors.join(", ") : "None — do not generate comparison prompts"}
 Price Sensitivity: ${audience.pricesSensitivity || "Unknown"}
+
+${marketContext.promptText}
 
 Generate exactly ${promptLimit} smart prompts.
 
@@ -1223,12 +1315,18 @@ Return JSON:
 // PROMPT ENGINE — Simulate & Score
 // ─────────────────────────────────────────────────────────────
 
-async function simulatePromptForProduct(prompt, product, existingAnalysis) {
+async function simulatePromptForProduct(
+  prompt,
+  product,
+  existingAnalysis,
+  store = null,
+) {
   const systemPrompt = `You are an AI shopping recommendation engine simulator. Evaluate precisely whether this product would be recommended for the given shopping prompt. Be brutally honest. Respond ONLY with valid JSON.`
 
   const interpretation = existingAnalysis?.interpretation || {}
   const identity = interpretation.productIdentity || {}
   const audience = interpretation.audienceProfile || {}
+  const marketContext = buildStoreMarketContext(store)
 
   const userPrompt = `Evaluate if this product would be recommended for this shopping query:
 
@@ -1244,6 +1342,8 @@ PRODUCT:
 - Best For: ${(existingAnalysis?.bestFor || []).join(", ") || "Not analysed yet"}
 - Intent Keywords: ${(existingAnalysis?.intentKeywords || []).join(", ") || "Not analysed yet"}
 - Inferred Attributes: ${(interpretation.semanticAttributes?.inferredAttributes || []).map((a) => a.attribute).join(", ") || "None"}
+
+${marketContext.promptText}
 
 Return JSON:
 {
@@ -1273,25 +1373,32 @@ Return JSON:
     })
 
     const raw = completion.choices[0].message.content.trim()
-    return { ...safeParseJSON(raw), rawAiResponse: raw }
+    return {
+      ...safeParseJSON(raw),
+      rawAiResponse: raw,
+      marketContext,
+    }
   } catch (err) {
     logger.error("AI prompt simulation failed:", err.message)
     throw new Error(`AI simulation failed: ${err.message}`)
   }
 }
 
-async function analysePromptIntelligence(prompt, storeProducts) {
+async function analysePromptIntelligence(prompt, storeProducts, store = null) {
   const systemPrompt = `You are a conversational commerce intelligence engine. Analyse shopping prompts and determine what products and attributes win AI recommendations. Respond ONLY with valid JSON.`
 
   const productTitles = storeProducts
     .slice(0, 20)
     .map((p) => p.title)
     .join(", ")
+  const marketContext = buildStoreMarketContext(store)
 
   const userPrompt = `Analyse this shopping query:
 
 QUERY: "${prompt}"
 MERCHANT'S PRODUCTS: ${productTitles || "Not provided"}
+
+${marketContext.promptText}
 
 Return JSON:
 {
@@ -1326,10 +1433,16 @@ Return JSON:
   }
 }
 
-async function scorePromptVisibility(prompt, product, existingAnalysis) {
+async function scorePromptVisibility(
+  prompt,
+  product,
+  existingAnalysis,
+  store = null,
+) {
   const systemPrompt = `You are an AI commerce visibility analyst. Score how well a product covers the buyer intent behind a shopping prompt using the product's deep interpretation. Respond ONLY with valid JSON.`
 
   const interpretation = existingAnalysis?.interpretation || {}
+  const marketContext = buildStoreMarketContext(store)
 
   const userPrompt = `Score product visibility for this AI shopping prompt:
 
@@ -1345,6 +1458,8 @@ PRODUCT:
 - Inferred Attributes: ${(interpretation.semanticAttributes?.inferredAttributes || []).map((a) => `${a.attribute} (${a.confidence})`).join(", ") || "None"}
 - Missing Critical Attributes: ${(interpretation.semanticAttributes?.missingCriticalAttributes || []).join(", ") || "None"}
 - Existing FAQs: ${(existingAnalysis?.faq || product.existingFaqs || []).map((f) => f.question).join("; ") || "None"}
+
+${marketContext.promptText}
 
 Return JSON:
 {
@@ -1382,10 +1497,16 @@ Return JSON:
   }
 }
 
-async function batchScorePrompts(prompts, product, existingAnalysis) {
+async function batchScorePrompts(
+  prompts,
+  product,
+  existingAnalysis,
+  store = null,
+) {
   const systemPrompt = `You are an AI commerce visibility analyst. Score multiple shopping prompts for one product using the product's deep interpretation. Respond ONLY with valid JSON array.`
 
   const interpretation = existingAnalysis?.interpretation || {}
+  const marketContext = buildStoreMarketContext(store)
 
   const userPrompt = `Score these AI shopping prompts for product visibility:
 
@@ -1399,6 +1520,8 @@ PRODUCT:
 
 PROMPTS TO SCORE:
 ${prompts.map((p, i) => `${i + 1}. "${p}"`).join("\n")}
+
+${marketContext.promptText}
 
 Return JSON array (one object per prompt, same order):
 [{
@@ -1431,7 +1554,8 @@ Return JSON array (one object per prompt, same order):
 
     const raw = completion.choices[0].message.content.trim()
     const parsed = safeParseJSON(raw)
-    return Array.isArray(parsed) ? parsed : parsed.prompts || []
+    const results = Array.isArray(parsed) ? parsed : parsed.prompts || []
+    return results.map((item) => ({ ...item, marketContext }))
   } catch (err) {
     logger.error("Batch prompt scoring failed:", err.message)
     throw new Error(`Batch prompt scoring failed: ${err.message}`)
@@ -1666,6 +1790,8 @@ function safeParseJSON(raw) {
 }
 
 export {
+  buildStoreMarketContext,
+  buildDefaultMarketVisibility,
   interpretProduct,
   analyseProduct,
   generateSmartPrompts,

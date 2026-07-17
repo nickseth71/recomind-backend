@@ -2,6 +2,9 @@ import axios from "axios"
 import crypto from "crypto"
 import logger from "../config/logger.js"
 
+const SHOPIFY_API_VERSION = "2025-10"
+const RECOMIND_METAFIELD_NAMESPACE = "RecoMind"
+
 /**
  * Build the Shopify OAuth authorisation URL.
  * Redirect the merchant to this URL to begin OAuth.
@@ -70,7 +73,7 @@ function verifyWebhookHmac(rawBody, hmacHeader) {
 async function fetchProductCollections(shop, accessToken, shopifyProductId) {
   try {
     const res = await axios.get(
-      `https://${shop}/admin/api/2024-01/products/${shopifyProductId}/collections.json?fields=id,title,handle`,
+      `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/products/${shopifyProductId}/collections.json?fields=id,title,handle`,
       { headers: { "X-Shopify-Access-Token": accessToken } },
     )
     return (res.data.collections || []).map((c) => ({
@@ -166,7 +169,7 @@ function mapProductMetafields(metafields) {
  */
 async function fetchAllProducts(shop, accessToken) {
   let products = []
-  let url = `https://${shop}/admin/api/2024-01/products.json?limit=250&fields=id,title,body_html,tags,variants,images,product_type,vendor,handle,status,created_at,updated_at`
+  let url = `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/products.json?limit=250&fields=id,title,body_html,tags,variants,images,product_type,vendor,handle,status,created_at,updated_at`
 
   while (url) {
     const res = await axios.get(url, {
@@ -192,13 +195,11 @@ async function fetchAllProducts(shop, accessToken) {
  */
 async function fetchProduct(shop, accessToken, shopifyProductId) {
   const res = await axios.get(
-    `https://${shop}/admin/api/2024-01/products/${shopifyProductId}.json`,
+    `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/products/${shopifyProductId}.json`,
     { headers: { "X-Shopify-Access-Token": accessToken } },
   )
   return res.data.product
 }
-
-const RECOMIND_METAFIELD_NAMESPACE = "RecoMind"
 
 /**
  * Fetch product metafields (for FAQ detection).
@@ -206,7 +207,7 @@ const RECOMIND_METAFIELD_NAMESPACE = "RecoMind"
 async function fetchProductMetafields(shop, accessToken, shopifyProductId) {
   try {
     const res = await axios.get(
-      `https://${shop}/admin/api/2024-01/products/${shopifyProductId}/metafields.json`,
+      `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/products/${shopifyProductId}/metafields.json`,
       { headers: { "X-Shopify-Access-Token": accessToken } },
     )
     return res.data.metafields || []
@@ -281,7 +282,7 @@ async function upsertProductFaqMetafield(
 
   if (existing) {
     const res = await axios.put(
-      `https://${shop}/admin/api/2024-01/metafields/${existing.id}.json`,
+      `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/metafields/${existing.id}.json`,
       {
         metafield: {
           id: existing.id,
@@ -295,7 +296,7 @@ async function upsertProductFaqMetafield(
   }
 
   const res = await axios.post(
-    `https://${shop}/admin/api/2024-01/products/${shopifyProductId}/metafields.json`,
+    `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/products/${shopifyProductId}/metafields.json`,
     payload,
     { headers: { "X-Shopify-Access-Token": accessToken } },
   )
@@ -307,7 +308,7 @@ async function upsertProductFaqMetafield(
  */
 async function updateProduct(shop, accessToken, shopifyProductId, payload) {
   const res = await axios.put(
-    `https://${shop}/admin/api/2024-01/products/${shopifyProductId}.json`,
+    `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/products/${shopifyProductId}.json`,
     { product: payload },
     {
       headers: {
@@ -329,7 +330,55 @@ async function fetchShopInfo(shop, accessToken) {
   return res.data.shop
 }
 
-const SHOPIFY_API_VERSION = "2024-01"
+async function fetchMarkets(shop, accessToken) {
+  const query = `
+    query {
+      markets(first: 50) {
+        edges {
+          node {
+            id
+            name
+            enabled
+            primary
+            regions(first: 50) {
+              edges {
+                node {
+                  ... on MarketRegionCountry {
+                    name
+                    code
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  `
+
+  const res = await axios.post(
+    `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
+    { query },
+    {
+      headers: {
+        "X-Shopify-Access-Token": accessToken,
+        "Content-Type": "application/json",
+      },
+    },
+  )
+
+  const edges = res.data?.data?.markets?.edges ?? []
+  return edges.map(({ node }) => ({
+    marketId: node.id,
+    name: node.name,
+    enabled: node.enabled,
+    primary: node.primary,
+    regions: (node.regions?.edges ?? []).map(({ node: r }) => ({
+      code: r.code,
+      name: r.name,
+    })),
+  }))
+}
 
 /**
  * Execute a GraphQL Admin API query.
@@ -752,5 +801,6 @@ export {
   fetchProductSalesMetrics,
   fetchProductSessionMetrics,
   fetchProductSalesFromOrders,
+  fetchMarkets,
   RECOMIND_METAFIELD_NAMESPACE,
 }

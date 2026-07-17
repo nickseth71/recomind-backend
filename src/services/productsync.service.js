@@ -185,6 +185,8 @@ async function applyOptimisationToShopify(
   const store = await Store.findById(storeId)
   if (!store) throw new Error("Store not found")
 
+    //console.log("accessToken from updateProduct:", store.accessToken)
+
   const product = await Product.findOne({
     storeId,
     shopifyProductId: String(shopifyProductId),
@@ -270,6 +272,8 @@ async function applyOptimisationToShopify(
     shopifyProductId,
     updatePayload,
   )
+
+ 
 
   await syncSingleProduct(storeId, shopifyProductId)
 

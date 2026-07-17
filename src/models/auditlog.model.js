@@ -24,6 +24,7 @@ const auditLogSchema = new mongoose.Schema(
         "STORE_UNINSTALLED",
         "PLAN_CHANGED",
         "REPORT_EXPORTED",
+        "MARKETS_ENABLED",
       ],
     },
     entityType: {

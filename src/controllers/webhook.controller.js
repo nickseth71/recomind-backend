@@ -3,6 +3,7 @@ import Product from "../models/product.model.js"
 import AuditLog from "../models/auditlog.model.js"
 import * as shopifyService from "../services/shopify.service.js"
 import * as productSyncService from "../services/productsync.service.js"
+import * as marketSyncService from "../services/marketsync.service.js"
 import { enqueueAnalysis } from "../jobs/analysisqueue.js"
 import logger from "../config/logger.js"
 
@@ -110,10 +111,23 @@ async function handleAppUninstalled(req, res) {
   }
 }
 
+async function handleMarketsUpdate(req, res) {
+  res.status(200).send() // ack immediately, per Shopify's webhook requirements
+
+  const shop = req.get("X-Shopify-Shop-Domain")
+  const store = await Store.findOne({ shopDomain: shop })
+  if (!store) return
+
+  marketSyncService.syncStoreMarkets(store).catch((err) => {
+    logger.warn(`Market webhook sync failed for ${shop}: ${err.message}`)
+  })
+}
+
 export {
   verifyShopifyWebhook,
   handleProductCreate,
   handleProductUpdate,
   handleProductDelete,
   handleAppUninstalled,
+  handleMarketsUpdate
 }
