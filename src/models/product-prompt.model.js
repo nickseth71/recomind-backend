@@ -36,6 +36,7 @@ const productPromptSchema = new mongoose.Schema(
     competitorDominating: { type: [String], default: [] },
     semanticGaps: { type: [String], default: [] },
     reasoning: String,
+    marketContext: mongoose.Schema.Types.Mixed,
     recommendedActions: {
       type: [mongoose.Schema.Types.Mixed],
       default: [],

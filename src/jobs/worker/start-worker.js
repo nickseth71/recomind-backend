@@ -152,6 +152,7 @@ async function processAnalysisJob(productId, storeId, job) {
 
       // Raw response for debugging
       rawAiResponse: result.rawAiResponse,
+      marketContext: result.marketContext || null,
     })
 
     job.updateProgress(75)

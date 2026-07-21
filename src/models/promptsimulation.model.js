@@ -35,6 +35,7 @@ const promptSimulationSchema = new mongoose.Schema(
 
     // What would improve the score
     recommendations: [String],
+    marketContext: mongoose.Schema.Types.Mixed,
 
     rawAiResponse: String,
   },

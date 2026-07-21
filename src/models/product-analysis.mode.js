@@ -31,6 +31,7 @@ const productAnalysisSchema = new mongoose.Schema(
       index: true,
     },
     images: [String],
+    marketContext: mongoose.Schema.Types.Mixed,
 
     // ── Overall AI readiness score 0–100 ─────────────────────────────
     score: { type: Number, required: true, min: 0, max: 100 },

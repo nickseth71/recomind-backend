@@ -78,6 +78,32 @@ const storeSchema = new mongoose.Schema(
       enum: ["auto", "inline", "metafield"],
       default: "auto",
     },
+    region: {
+      country: String, // "India"
+      countryCode: String, // "IN"
+      province: String,
+      provinceCode: String,
+      updatedAt: Date,
+    },
+
+    // Store model — add this field
+    markets: [
+      {
+        marketId: { type: String, required: true }, // Shopify gid, e.g. "gid://shopify/Market/123"
+        name: String,
+        enabled: { type: Boolean, default: false },
+        primary: { type: Boolean, default: false },
+        regions: [
+          {
+            code: String, // ISO country code
+            name: String,
+          },
+        ],
+        firstSeenAt: { type: Date, default: Date.now },
+        enabledAt: Date, // set the first time we observe enabled: true
+        lastSyncedAt: Date,
+      },
+    ],
     isActive: { type: Boolean, default: true },
     installedAt: { type: Date, default: Date.now },
     uninstalledAt: { type: Date, default: null },
@@ -103,6 +129,11 @@ storeSchema.pre("save", function (next) {
 storeSchema.methods.setAccessToken = function (plainToken) {
   const key = process.env.ENCRYPTION_KEY
   this.accessTokenEncrypted = CryptoJS.AES.encrypt(plainToken, key).toString()
+}
+
+// Helper: decrypt and return token for Shopify API calls
+storeSchema.methods.getAccessToken = function () {
+  return this.accessToken || null
 }
 
 // Check plan features (includes paid add-ons)
@@ -152,7 +183,13 @@ storeSchema.methods.getRemainingTokens = function () {
 storeSchema.methods.incrementUsage = async function (field, amount = 1) {
   if (!this.usage) this.usage = {}
   const key = field
-  if (["productsAnalyzed", "manualPromptsGenerated", "autoPromptsGenerated"].includes(key)) {
+  if (
+    [
+      "productsAnalyzed",
+      "manualPromptsGenerated",
+      "autoPromptsGenerated",
+    ].includes(key)
+  ) {
     this.usage[key] = (this.usage[key] || 0) + amount
     await this.save()
   }
