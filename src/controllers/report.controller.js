@@ -22,24 +22,43 @@ async function getSummary(req, res, next) {
         .lean(),
     ])
 
-    // Latest analysis per product
     const latestByProduct = {}
-    for (const a of analyses) {
-      const pid = a.productId.toString()
-      if (!latestByProduct[pid]) latestByProduct[pid] = a
+    for (const analysis of analyses) {
+      const pid = analysis.productId?.toString?.() || analysis.productId
+      if (!pid) continue
+      if (!latestByProduct[pid]) latestByProduct[pid] = analysis
     }
 
-    const productReports = products.map((p) => ({
-      title: p.title,
-      score: p.analysisScore,
-      isOptimized: p.isOptimized,
-      analysis: latestByProduct[p._id.toString()] || null,
+    const productLookup = new Map(
+      products.map((product) => [product._id.toString(), product]),
+    )
+
+    const analyzedProducts = Object.values(latestByProduct)
+      .map((analysis) => {
+        const productId = analysis.productId?.toString?.() || analysis.productId
+        const product = productLookup.get(productId) || null
+
+        return {
+          id: productId,
+          title: product?.title || analysis.productTitle || "Untitled product",
+          score: Number.isFinite(analysis.score) ? analysis.score : 0,
+          isOptimized: Boolean(product?.isOptimized),
+          analysis,
+        }
+      })
+      .filter((item) => item.score != null)
+
+    const productReports = analyzedProducts.map((item) => ({
+      title: item.title,
+      score: item.score,
+      isOptimized: item.isOptimized,
+      analysis: item.analysis,
     }))
 
-    const avgScore = products.length
+    const avgScore = analyzedProducts.length
       ? Math.round(
-          products.reduce((s, p) => s + (p.analysisScore || 0), 0) /
-            products.length,
+          analyzedProducts.reduce((sum, item) => sum + (item.score || 0), 0) /
+            analyzedProducts.length,
         )
       : 0
 
@@ -48,6 +67,55 @@ async function getSummary(req, res, next) {
       high: simulations.filter((s) => s.likelihood === "HIGH").length,
       med: simulations.filter((s) => s.likelihood === "MED").length,
       low: simulations.filter((s) => s.likelihood === "LOW").length,
+    }
+
+    const exportData = {
+      generatedAt: new Date().toISOString(),
+      store: {
+        shopDomain: req.store.shopDomain,
+        shopName: req.store.shopName,
+        plan: req.store.plan,
+      },
+      summary: {
+        totalProducts: products.length,
+        avgAiScore: avgScore,
+        optimisedProducts: products.filter((p) => p.isOptimized).length,
+        criticalProducts: analyzedProducts.filter((item) => item.score < 40)
+          .length,
+      },
+      products: analyzedProducts.map((item) => {
+        const analysis = item.analysis
+        const readinessGaps = analysis?.interpretation?.aiReadinessGaps || {}
+        const recommendations = (analysis?.prioritizedFixes || [])
+          .filter((fix) => fix?.fix)
+          .slice(0, 5)
+          .map(({ fix, impact, effort }) => ({ fix, impact, effort }))
+
+        return {
+          title: item.title,
+          score: item.score,
+          isOptimized: item.isOptimized,
+          readiness: {
+            status: item.isOptimized
+              ? "Optimized"
+              : item.score >= 70
+                ? "Healthy"
+                : "Needs attention",
+            criticalGaps: readinessGaps.criticalGaps || [],
+            moderateGaps: readinessGaps.moderateGaps || [],
+            minorGaps: readinessGaps.minorGaps || [],
+          },
+          recommendations,
+          signals: {
+            bestFor: (analysis?.bestFor || []).slice(0, 5),
+            missingSignals: (analysis?.missingSignals || []).slice(0, 5),
+            comparisonOpportunities: (
+              analysis?.comparisonOpportunities || []
+            ).slice(0, 5),
+          },
+        }
+      }),
+      simulationSummary: simStats,
     }
 
     res.json({
@@ -62,12 +130,13 @@ async function getSummary(req, res, next) {
           totalProducts: products.length,
           avgAiScore: avgScore,
           optimisedProducts: products.filter((p) => p.isOptimized).length,
-          criticalProducts: products.filter((p) => (p.analysisScore || 0) < 40)
+          criticalProducts: analyzedProducts.filter((item) => item.score < 40)
             .length,
         },
         productReports,
         simulationStats: simStats,
         generatedAt: new Date().toISOString(),
+        exportData,
       },
     })
   } catch (err) {
