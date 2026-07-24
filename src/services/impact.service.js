@@ -540,6 +540,162 @@ async function getProductImpact(store, { windowDays = 7, limit = 20 } = {}) {
   }
 }
 
+// /**
+//  * GET /impact/opportunities — top intent/fix gains linked to Shopify performance.
+//  */
+// async function getTopOpportunities(store, { windowDays = 7, limit = 10 } = {}) {
+//   const storeId = store._id
+//   const { shop, accessToken } = getStoreCredentials(store)
+//   const days = Math.min(Math.max(parseInt(windowDays, 10) || 7, 1), 90)
+//   const maxItems = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 50)
+
+//   const optimizedProducts = await Product.find({ storeId, isOptimized: true })
+//     .select("_id title shopifyProductId")
+//     .lean()
+
+//   const productIds = optimizedProducts.map((p) => p._id)
+//   const productById = Object.fromEntries(
+//     optimizedProducts.map((p) => [p._id.toString(), p]),
+//   )
+
+//   const prompts = await ProductPrompt.find({
+//     storeId,
+//     productId: { $in: productIds },
+//     visibility: "HIGH",
+//     isTracked: true,
+//   })
+//     .select("prompt buyerIntent productId scoreHistory visibility")
+//     .lean()
+
+//   const opportunities = []
+
+//   for (const prompt of prompts) {
+//     const product = productById[prompt.productId.toString()]
+//     if (!product) continue
+
+//     const analysis = await ProductAnalysis.findOne({
+//       productId: product._id,
+//       appliedToShopify: true,
+//       appliedAt: { $ne: null },
+//     })
+//       .sort({ appliedAt: -1 })
+//       .select("appliedAt prioritizedFixes")
+//       .lean()
+
+//     if (!analysis?.appliedAt) continue
+
+//     const wasHighBefore = (prompt.scoreHistory || []).some(
+//       (h) =>
+//         h.visibility === "HIGH" &&
+//         new Date(h.scoredAt) <= new Date(analysis.appliedAt),
+//     )
+//     if (wasHighBefore) continue
+
+//     const afterStart = new Date(analysis.appliedAt)
+//     const afterEnd = new Date(analysis.appliedAt)
+//     afterEnd.setDate(afterEnd.getDate() + days)
+//     if (afterEnd > new Date()) afterEnd.setTime(Date.now())
+
+//     const beforeStart = new Date(analysis.appliedAt)
+//     beforeStart.setDate(beforeStart.getDate() - days)
+//     const beforeEnd = new Date(analysis.appliedAt)
+
+//     const titleKey = product.title.toLowerCase()
+//     let beforeSessions
+//     let afterSessions
+//     let beforeSales
+//     let afterSales
+//     let trafficChange = null
+//     let conversionChange = null
+//     let revenueChange = null
+
+//     try {
+//       ;[beforeSessions, afterSessions, beforeSales, afterSales] =
+//         await Promise.all([
+//           shopifyService.fetchProductSessionMetrics(
+//             shop,
+//             accessToken,
+//             beforeStart,
+//             beforeEnd,
+//           ),
+//           shopifyService.fetchProductSessionMetrics(
+//             shop,
+//             accessToken,
+//             afterStart,
+//             afterEnd,
+//           ),
+//           shopifyService.fetchProductSalesMetrics(
+//             shop,
+//             accessToken,
+//             beforeStart,
+//             beforeEnd,
+//           ),
+//           shopifyService.fetchProductSalesMetrics(
+//             shop,
+//             accessToken,
+//             afterStart,
+//             afterEnd,
+//           ),
+//         ])
+
+//       const before = beforeSessions[titleKey] || {}
+//       const after = afterSessions[titleKey] || {}
+//       const beforeRev = beforeSales[titleKey]?.revenue ?? 0
+//       const afterRev = afterSales[titleKey]?.revenue ?? 0
+
+//       trafficChange = pctChange(before.traffic, after.traffic)
+//       conversionChange = pctChange(before.conversionRate, after.conversionRate)
+//       revenueChange = pctChange(beforeRev, afterRev)
+//     } catch (err) {
+//       if (!isShopifyAccessError(err)) throw err
+//       logger.warn(
+//         `Shopify analytics unavailable for opportunities (${product.title}); skipping metrics`,
+//         err.message,
+//       )
+//     }
+
+//     const impactParts = []
+//     if (trafficChange != null)
+//       impactParts.push(`Traffic: ${formatPct(trafficChange)}`)
+//     if (conversionChange != null)
+//       impactParts.push(`Conversions: ${formatPct(conversionChange)}`)
+//     if (revenueChange != null)
+//       impactParts.push(`Revenue: ${formatPct(revenueChange)}`)
+
+//     const keyword = prompt.prompt || prompt.buyerIntent
+//     opportunities.push({
+//       keyword,
+//       productId: product._id,
+//       productTitle: product.title,
+//       impact: impactParts[0] || "Intent matched after optimization",
+//       impact2: impactParts[1] || null,
+//       priority: "HIGH",
+//       metrics: {
+//         trafficChange,
+//         conversionChange,
+//         revenueChange,
+//       },
+//       detail: `Performance improved after optimization for "${keyword}". Products matching this buyer intent saw gains across traffic, add-to-cart, and order metrics in the ${days} days following the fix.`,
+//       optimizedAt: analysis.appliedAt,
+//     })
+//   }
+
+//   opportunities.sort((a, b) => {
+//     const scoreA =
+//       Math.abs(a.metrics.revenueChange || 0) +
+//       Math.abs(a.metrics.trafficChange || 0)
+//     const scoreB =
+//       Math.abs(b.metrics.revenueChange || 0) +
+//       Math.abs(b.metrics.trafficChange || 0)
+//     return scoreB - scoreA
+//   })
+
+//   return {
+//     opportunities: opportunities.slice(0, maxItems),
+//     windowDays: days,
+//   }
+// }
+
 /**
  * GET /impact/opportunities — top intent/fix gains linked to Shopify performance.
  */
@@ -567,29 +723,24 @@ async function getTopOpportunities(store, { windowDays = 7, limit = 10 } = {}) {
     .select("prompt buyerIntent productId scoreHistory visibility")
     .lean()
 
-  const opportunities = []
+  // NEW — cache Shopify metrics per product so N prompts on the same
+  // product only trigger ONE set of Shopify calls, not N sets.
+  const metricsCache = new Map()
+  // NEW — once we hit a real Shopify access error, stop retrying it for
+  // the rest of this request; every subsequent call for this store would
+  // fail the exact same way, so there's no point paying the network cost
+  // (ShopifyQL + REST fallback) dozens of times over.
+  let shopifyDisabledForThisRequest = false
 
-  for (const prompt of prompts) {
-    const product = productById[prompt.productId.toString()]
-    if (!product) continue
+  async function getProductMetricsOnce(product, analysis) {
+    const cacheKey = `${product._id}:${analysis.appliedAt}`
+    if (metricsCache.has(cacheKey)) return metricsCache.get(cacheKey)
 
-    const analysis = await ProductAnalysis.findOne({
-      productId: product._id,
-      appliedToShopify: true,
-      appliedAt: { $ne: null },
-    })
-      .sort({ appliedAt: -1 })
-      .select("appliedAt prioritizedFixes")
-      .lean()
-
-    if (!analysis?.appliedAt) continue
-
-    const wasHighBefore = (prompt.scoreHistory || []).some(
-      (h) =>
-        h.visibility === "HIGH" &&
-        new Date(h.scoredAt) <= new Date(analysis.appliedAt),
-    )
-    if (wasHighBefore) continue
+    if (shopifyDisabledForThisRequest) {
+      const empty = { beforeSessions: {}, afterSessions: {}, beforeSales: {}, afterSales: {} }
+      metricsCache.set(cacheKey, empty)
+      return empty
+    }
 
     const afterStart = new Date(analysis.appliedAt)
     const afterEnd = new Date(analysis.appliedAt)
@@ -600,67 +751,80 @@ async function getTopOpportunities(store, { windowDays = 7, limit = 10 } = {}) {
     beforeStart.setDate(beforeStart.getDate() - days)
     const beforeEnd = new Date(analysis.appliedAt)
 
-    const titleKey = product.title.toLowerCase()
-    let beforeSessions
-    let afterSessions
-    let beforeSales
-    let afterSales
-    let trafficChange = null
-    let conversionChange = null
-    let revenueChange = null
-
+    let result
     try {
-      ;[beforeSessions, afterSessions, beforeSales, afterSales] =
+      const [beforeSessions, afterSessions, beforeSales, afterSales] =
         await Promise.all([
-          shopifyService.fetchProductSessionMetrics(
-            shop,
-            accessToken,
-            beforeStart,
-            beforeEnd,
-          ),
-          shopifyService.fetchProductSessionMetrics(
-            shop,
-            accessToken,
-            afterStart,
-            afterEnd,
-          ),
-          shopifyService.fetchProductSalesMetrics(
-            shop,
-            accessToken,
-            beforeStart,
-            beforeEnd,
-          ),
-          shopifyService.fetchProductSalesMetrics(
-            shop,
-            accessToken,
-            afterStart,
-            afterEnd,
-          ),
+          shopifyService.fetchProductSessionMetrics(shop, accessToken, beforeStart, beforeEnd),
+          shopifyService.fetchProductSessionMetrics(shop, accessToken, afterStart, afterEnd),
+          shopifyService.fetchProductSalesMetrics(shop, accessToken, beforeStart, beforeEnd),
+          shopifyService.fetchProductSalesMetrics(shop, accessToken, afterStart, afterEnd),
         ])
-
-      const before = beforeSessions[titleKey] || {}
-      const after = afterSessions[titleKey] || {}
-      const beforeRev = beforeSales[titleKey]?.revenue ?? 0
-      const afterRev = afterSales[titleKey]?.revenue ?? 0
-
-      trafficChange = pctChange(before.traffic, after.traffic)
-      conversionChange = pctChange(before.conversionRate, after.conversionRate)
-      revenueChange = pctChange(beforeRev, afterRev)
+      result = { beforeSessions, afterSessions, beforeSales, afterSales }
     } catch (err) {
       if (!isShopifyAccessError(err)) throw err
       logger.warn(
-        `Shopify analytics unavailable for opportunities (${product.title}); skipping metrics`,
+        `Shopify analytics unavailable for opportunities (${store.shopDomain}); disabling further Shopify calls for this request`,
         err.message,
       )
+      shopifyDisabledForThisRequest = true
+      result = { beforeSessions: {}, afterSessions: {}, beforeSales: {}, afterSales: {} }
     }
 
+    metricsCache.set(cacheKey, result)
+    return result
+  }
+
+  // Cache analysis lookups per product too — same reasoning
+  const analysisCache = new Map()
+  async function getAnalysisOnce(productId) {
+    const key = productId.toString()
+    if (analysisCache.has(key)) return analysisCache.get(key)
+    const analysis = await ProductAnalysis.findOne({
+      productId,
+      appliedToShopify: true,
+      appliedAt: { $ne: null },
+    })
+      .sort({ appliedAt: -1 })
+      .select("appliedAt prioritizedFixes")
+      .lean()
+    analysisCache.set(key, analysis)
+    return analysis
+  }
+
+  const opportunities = []
+
+  for (const prompt of prompts) {
+    const product = productById[prompt.productId.toString()]
+    if (!product) continue
+
+    const analysis = await getAnalysisOnce(product._id)
+    if (!analysis?.appliedAt) continue
+
+    const wasHighBefore = (prompt.scoreHistory || []).some(
+      (h) =>
+        h.visibility === "HIGH" &&
+        new Date(h.scoredAt) <= new Date(analysis.appliedAt),
+    )
+    if (wasHighBefore) continue
+
+    const titleKey = product.title.toLowerCase()
+    const { beforeSessions, afterSessions, beforeSales, afterSales } =
+      await getProductMetricsOnce(product, analysis)
+
+    const before = beforeSessions[titleKey] || {}
+    const after = afterSessions[titleKey] || {}
+    const beforeRev = beforeSales[titleKey]?.revenue ?? 0
+    const afterRev = afterSales[titleKey]?.revenue ?? 0
+
+    const trafficChange = pctChange(before.traffic, after.traffic)
+    const conversionChange = pctChange(before.conversionRate, after.conversionRate)
+    const revenueChange = pctChange(beforeRev, afterRev)
+
     const impactParts = []
-    if (trafficChange != null)
-      impactParts.push(`Traffic: ${formatPct(trafficChange)}`)
-    if (conversionChange != null)
-      impactParts.push(`Conversions: ${formatPct(conversionChange)}`)
-    if (revenueChange != null)
-      impactParts.push(`Revenue: ${formatPct(revenueChange)}`)
+    if (trafficChange != null) impactParts.push(`Traffic: ${formatPct(trafficChange)}`)
+    if (conversionChange != null) impactParts.push(`Conversions: ${formatPct(conversionChange)}`)
+    if (revenueChange != null) impactParts.push(`Revenue: ${formatPct(revenueChange)}`)
 
     const keyword = prompt.prompt || prompt.buyerIntent
     opportunities.push({
@@ -670,23 +834,15 @@ async function getTopOpportunities(store, { windowDays = 7, limit = 10 } = {}) {
       impact: impactParts[0] || "Intent matched after optimization",
       impact2: impactParts[1] || null,
       priority: "HIGH",
-      metrics: {
-        trafficChange,
-        conversionChange,
-        revenueChange,
-      },
+      metrics: { trafficChange, conversionChange, revenueChange },
       detail: `Performance improved after optimization for "${keyword}". Products matching this buyer intent saw gains across traffic, add-to-cart, and order metrics in the ${days} days following the fix.`,
       optimizedAt: analysis.appliedAt,
     })
   }
 
   opportunities.sort((a, b) => {
-    const scoreA =
-      Math.abs(a.metrics.revenueChange || 0) +
-      Math.abs(a.metrics.trafficChange || 0)
-    const scoreB =
-      Math.abs(b.metrics.revenueChange || 0) +
-      Math.abs(b.metrics.trafficChange || 0)
+    const scoreA = Math.abs(a.metrics.revenueChange || 0) + Math.abs(a.metrics.trafficChange || 0)
+    const scoreB = Math.abs(b.metrics.revenueChange || 0) + Math.abs(b.metrics.trafficChange || 0)
     return scoreB - scoreA
   })
 

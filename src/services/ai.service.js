@@ -814,7 +814,7 @@ const openai = new OpenAI({
 })
 
 const MODEL = process.env.OPENAI_MODEL || "gpt-4o"
-const MAX_TOKENS = parseInt(process.env.OPENAI_MAX_TOKENS) || 4000
+const MAX_TOKENS = parseInt(process.env.OPENAI_MAX_TOKENS) || 6000
 
 // ─── Scoring weights ─────────────────────────────────────────
 export const SCORE_WEIGHTS = {
@@ -1131,8 +1131,8 @@ Return this exact JSON:
     "existingCount": ${existingFaqs.length},
     "suggestedCount": 0,
     "needsImprovement": false,
-    "action": "none",
-    "recommendedStrategy": "inline",
+    "action": "none" | "create" | "update" | "review" — pick exactly one of these four strings, no other value is valid,
+    "recommendedStrategy": "inline" | "metafield" | "skip" — pick exactly one of these three strings, no other value is valid,
     "objectionsCovered": [],
     "objectionsUncovered": []
   },
@@ -1174,6 +1174,13 @@ Return this exact JSON:
         { role: "user", content: userPrompt },
       ],
     })
+
+    const choice = completion.choices[0]
+    if (choice.finish_reason === "length") {
+      logger.warn(
+        `[RecoMind] Stage 2 response for "${product.title}" was truncated (hit max_tokens=${MAX_TOKENS}) — attempting repair`,
+      )
+    }
 
     const raw = completion.choices[0].message.content.trim()
     const parsed = safeParseJSON(raw)
@@ -1784,8 +1791,75 @@ function safeParseJSON(raw) {
   } catch (e) {
     logger.warn("JSON parse failed, attempting extraction:", e.message)
     const match = raw.match(/[\[{][\s\S]*[\]}]/)
-    if (match) return JSON.parse(match[0])
+    if (match) {
+      try {
+        return JSON.parse(match[0])
+      } catch (e2) {
+        // Likely a truncated response (hit max_tokens mid-object) — the
+        // extracted slice starts with { or [ but never got its matching
+        // close. Try a last-resort repair: count unbalanced brackets/braces
+        // and append what's needed to close them, then re-parse. This
+        // recovers the vast majority of fields even when the AI response
+        // was cut off, instead of failing the whole job outright.
+        const repaired = attemptJsonRepair(match[0])
+        if (repaired) {
+          logger.warn(
+            "Recovered a truncated AI response via JSON repair — some fields may be incomplete",
+          )
+          return repaired
+        }
+        throw new Error(
+          `Could not parse AI response as JSON (likely truncated): ${e2.message}`,
+        )
+      }
+    }
     throw new Error("Could not parse AI response as JSON")
+  }
+}
+
+/**
+ * Best-effort repair for a truncated JSON string: closes any unterminated
+ * string, then appends closing brackets/braces to match what's open.
+ * Returns the parsed object on success, or null if repair wasn't possible.
+ */
+function attemptJsonRepair(text) {
+  try {
+    let repaired = text
+    // If we're inside an unterminated string (odd number of unescaped quotes
+    // after the last structural character), close it first.
+    const quoteCount = (repaired.match(/(?<!\\)"/g) || []).length
+    if (quoteCount % 2 !== 0) {
+      repaired += '"'
+    }
+    // Trim any trailing comma before we close things off.
+    repaired = repaired.replace(/,\s*$/, "")
+ 
+    const stack = []
+    let inString = false
+    let escaped = false
+    for (const ch of repaired) {
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      if (ch === "\\") {
+        escaped = true
+        continue
+      }
+      if (ch === '"') {
+        inString = !inString
+        continue
+      }
+      if (inString) continue
+      if (ch === "{" || ch === "[") stack.push(ch === "{" ? "}" : "]")
+      else if (ch === "}" || ch === "]") stack.pop()
+    }
+    while (stack.length) {
+      repaired += stack.pop()
+    }
+    return JSON.parse(repaired)
+  } catch {
+    return null
   }
 }
 

@@ -124,6 +124,9 @@ const productSchema = new mongoose.Schema(
     syncedAt: { type: Date, default: Date.now },
     productCategory: String,
     primaryBuyer: String,
+    isRemovedFromSync: { type: Boolean, default: false },
+    selectedAt: { type: Date, default: Date.now },
+    removedAt: { type: Date, default: null },
   },
   { timestamps: true },
 )
