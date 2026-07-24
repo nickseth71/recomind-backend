@@ -199,22 +199,56 @@ storeSchema.methods.incrementUsage = async function (field, amount = 1) {
 // Deduct tokens from quota
 storeSchema.methods.deductTokens = async function (amount) {
   this.resetMonthlyQuotaIfNeeded()
+  // Persist a quota reset if one just happened, so the atomic filter
+  // below compares against the correct (possibly just-reset) values.
+  if (this.isModified()) {
+    await this.save()
+  }
 
-  if (!this.canUseTokens(amount)) {
+  const Store = this.constructor
+
+  // Atomic check-and-increment: MongoDB applies this as a single operation,
+  // so concurrent calls (e.g. bulk analysis jobs running in parallel on the
+  // worker) can never read a stale in-memory value and overwrite each
+  // other's deduction — each increment is guaranteed to apply on top of
+  // whatever the previous one left behind.
+  const updated = await Store.findOneAndUpdate(
+    {
+      _id: this._id,
+      $expr: {
+        $lte: [
+          { $add: ["$tokensUsedThisMonth", amount] },
+          "$monthlyTokenQuota",
+        ],
+      },
+    },
+    { $inc: { tokensUsedThisMonth: amount, lifetimeTokensUsed: amount } },
+    { new: true },
+  )
+
+  if (!updated) {
+    const fresh = await Store.findById(this._id)
     const err = new Error("Insufficient token quota for this month")
     err.statusCode = 429
-    err.remainingTokens = this.getRemainingTokens()
+    err.remainingTokens = Math.max(
+      0,
+      (fresh?.monthlyTokenQuota || 0) - (fresh?.tokensUsedThisMonth || 0),
+    )
     throw err
   }
 
-  this.tokensUsedThisMonth += amount
-  this.lifetimeTokensUsed += amount
-  await this.save()
+  // Keep this in-memory instance in sync for any code that reads
+  // store.tokensUsedThisMonth right after calling deductTokens.
+  this.tokensUsedThisMonth = updated.tokensUsedThisMonth
+  this.lifetimeTokensUsed = updated.lifetimeTokensUsed
 
   return {
     used: amount,
-    remaining: this.getRemainingTokens(),
-    quota: this.monthlyTokenQuota,
+    remaining: Math.max(
+      0,
+      updated.monthlyTokenQuota - updated.tokensUsedThisMonth,
+    ),
+    quota: updated.monthlyTokenQuota,
   }
 }
 
