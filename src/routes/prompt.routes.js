@@ -11,6 +11,12 @@ router.get(
   requireFeature("promptWinDashboard"),
   ctrl.getWinDashboard,
 )
+
+router.get(
+  "/win-dashboard/prompts",
+  requireFeature("promptWinDashboard"),
+  ctrl.getWinDashboardPrompts,
+)
 router.get("/history", ctrl.getSimulationHistory)
 router.post("/score", aiLimiter, ctrl.scorePrompt)
 router.post(

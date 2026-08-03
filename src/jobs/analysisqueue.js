@@ -178,6 +178,7 @@ async function getJobStatus(jobId) {
   const state = await job.getState()
   return {
     id: job.id,
+    productId: job.data?.productId || null,
     status: state,
     progress: job.progress,
     result: job.returnvalue,

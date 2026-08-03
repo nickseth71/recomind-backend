@@ -470,7 +470,10 @@ async function processAnalysisJob(productId, storeId, job) {
       primaryBuyer:
         result.interpretation?.audienceProfile?.primaryBuyer || undefined,
       autoPromptsCount: result.smartPrompts?.prompts?.length || 0,
-      analyzationCount: (product.analyzationCount || 0) + 1,
+    })
+
+    await Product.findByIdAndUpdate(productId, {
+      $inc: { analyzationCount: 1 },
     })
 
     // ── Auto-generate Prompt Win scores ───────────────────────────────

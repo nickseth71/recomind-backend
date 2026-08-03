@@ -808,6 +808,7 @@
 import axios from "axios"
 import crypto from "crypto"
 import logger from "../config/logger.js"
+import shopifyHttp from "../utils/shopify-http.js"
 
 const SHOPIFY_API_VERSION = "2025-10"
 const RECOMIND_METAFIELD_NAMESPACE = "RecoMind"
@@ -833,11 +834,14 @@ function buildAuthUrl(shop, state) {
  */
 async function exchangeCodeForToken(shop, code) {
   const { SHOPIFY_API_KEY, SHOPIFY_API_SECRET } = process.env
-  const res = await axios.post(`https://${shop}/admin/oauth/access_token`, {
-    client_id: SHOPIFY_API_KEY,
-    client_secret: SHOPIFY_API_SECRET,
-    code,
-  })
+  const res = await shopifyHttp.post(
+    `https://${shop}/admin/oauth/access_token`,
+    {
+      client_id: SHOPIFY_API_KEY,
+      client_secret: SHOPIFY_API_SECRET,
+      code,
+    },
+  )
   return res.data.access_token
 }
 
@@ -879,7 +883,7 @@ function verifyWebhookHmac(rawBody, hmacHeader) {
  */
 async function fetchProductCollections(shop, accessToken, shopifyProductId) {
   try {
-    const res = await axios.get(
+    const res = await shopifyHttp.get(
       `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/products/${shopifyProductId}/collections.json?fields=id,title,handle`,
       { headers: { "X-Shopify-Access-Token": accessToken } },
     )
@@ -979,7 +983,7 @@ async function fetchAllProducts(shop, accessToken) {
   let url = `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/products.json?limit=250&fields=id,title,body_html,tags,variants,images,product_type,vendor,handle,status,created_at,updated_at`
 
   while (url) {
-    const res = await axios.get(url, {
+    const res = await shopifyHttp.get(url, {
       headers: { "X-Shopify-Access-Token": accessToken },
     })
     products = products.concat(res.data.products)
@@ -1001,7 +1005,7 @@ async function fetchAllProducts(shop, accessToken) {
  * Fetch a single product from Shopify by its ID.
  */
 async function fetchProduct(shop, accessToken, shopifyProductId) {
-  const res = await axios.get(
+  const res = await shopifyHttp.get(
     `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/products/${shopifyProductId}.json`,
     { headers: { "X-Shopify-Access-Token": accessToken } },
   )
@@ -1013,7 +1017,7 @@ async function fetchProduct(shop, accessToken, shopifyProductId) {
  */
 async function fetchProductMetafields(shop, accessToken, shopifyProductId) {
   try {
-    const res = await axios.get(
+    const res = await shopifyHttp.get(
       `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/products/${shopifyProductId}/metafields.json`,
       { headers: { "X-Shopify-Access-Token": accessToken } },
     )
@@ -1088,7 +1092,7 @@ async function upsertProductFaqMetafield(
   }
 
   if (existing) {
-    const res = await axios.put(
+    const res = await shopifyHttp.put(
       `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/metafields/${existing.id}.json`,
       {
         metafield: {
@@ -1102,7 +1106,7 @@ async function upsertProductFaqMetafield(
     return res.data.metafield
   }
 
-  const res = await axios.post(
+  const res = await shopifyHttp.post(
     `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/products/${shopifyProductId}/metafields.json`,
     payload,
     { headers: { "X-Shopify-Access-Token": accessToken } },
@@ -1114,7 +1118,7 @@ async function upsertProductFaqMetafield(
  * Update a product's title, body_html, and tags in Shopify.
  */
 async function updateProduct(shop, accessToken, shopifyProductId, payload) {
-  const res = await axios.put(
+  const res = await shopifyHttp.put(
     `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/products/${shopifyProductId}.json`,
     { product: payload },
     {
@@ -1131,9 +1135,12 @@ async function updateProduct(shop, accessToken, shopifyProductId, payload) {
  * Get basic shop info (name, email, owner, currency, etc.)
  */
 async function fetchShopInfo(shop, accessToken) {
-  const res = await axios.get(`https://${shop}/admin/api/2024-01/shop.json`, {
-    headers: { "X-Shopify-Access-Token": accessToken },
-  })
+  const res = await shopifyHttp.get(
+    `https://${shop}/admin/api/2024-01/shop.json`,
+    {
+      headers: { "X-Shopify-Access-Token": accessToken },
+    },
+  )
   return res.data.shop
 }
 
@@ -1163,7 +1170,7 @@ async function fetchMarkets(shop, accessToken) {
     }
   `
 
-  const res = await axios.post(
+  const res = await shopifyHttp.post(
     `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
     { query },
     {
@@ -1192,7 +1199,7 @@ async function fetchMarkets(shop, accessToken) {
  */
 async function graphqlQuery(shop, accessToken, query, variables = {}) {
   try {
-    const res = await axios.post(
+    const res = await shopifyHttp.post(
       `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
       { query, variables },
       {
@@ -1456,7 +1463,7 @@ async function fetchOrdersInRange(shop, accessToken, startDate, endDate) {
   const orders = []
   try {
     while (url) {
-      const res = await axios.get(url, {
+      const res = await shopifyHttp.get(url, {
         headers: { "X-Shopify-Access-Token": accessToken },
       })
       orders.push(...(res.data.orders || []))
@@ -1652,7 +1659,7 @@ async function fetchProductsByIds(shop, accessToken, shopifyProductIds = []) {
 async function registerWebhook(shop, accessToken, topic) {
   const address = `${process.env.APP_URL}/api/webhooks/${topic.replace("/", "-")}`
   try {
-    await axios.post(
+    await shopifyHttp.post(
       `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/webhooks.json`,
       { webhook: { topic, address, format: "json" } },
       { headers: { "X-Shopify-Access-Token": accessToken } },

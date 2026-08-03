@@ -214,6 +214,67 @@ const openapiPaths = {
     },
   },
 
+  "/products/shopify-search": {
+    get: {
+      tags: ["Products"],
+      summary:
+        "Live-search the merchant's Shopify catalog (product sync picker)",
+      description:
+        "Searches Shopify directly (not our DB) so the picker reflects the live store catalog, including products never synced. Marks which results are already synced.",
+      security: bearer,
+      parameters: [
+        {
+          name: "query",
+          in: "query",
+          schema: { type: "string" },
+          description: "Search term matched against product title",
+        },
+        {
+          name: "cursor",
+          in: "query",
+          schema: { type: "string" },
+          description:
+            "Pagination cursor from a previous response's pageInfo.endCursor",
+        },
+        {
+          name: "limit",
+          in: "query",
+          schema: { type: "integer", default: 20, maximum: 50 },
+        },
+      ],
+      responses: ok(
+        "Shopify products with sync status, plus pageInfo for pagination",
+      ),
+    },
+  },
+
+  "/products/sync-selected": {
+    post: {
+      tags: ["Products"],
+      summary:
+        "Sync specific products chosen in the picker (respects plan slot limit)",
+      security: bearer,
+      requestBody: jsonBody(
+        {
+          type: "object",
+          required: ["shopifyProductIds"],
+          properties: {
+            shopifyProductIds: {
+              type: "array",
+              items: { type: "string" },
+              description: "Numeric Shopify product IDs to sync",
+            },
+          },
+        },
+        true,
+      ),
+      responses: {
+        200: { description: "Products synced" },
+        403: { description: "Plan sync-slot limit reached" },
+      },
+    },
+  },
+
   "/products/sync": {
     post: {
       tags: ["Products"],
@@ -457,10 +518,24 @@ const openapiPaths = {
     },
   },
 
+  "/products/{id}/sync": {
+    delete: {
+      tags: ["Products"],
+      summary: "Remove a product from the active sync set",
+      description:
+        "Soft-removes the product from sync — its analysis/optimization history is kept, and this frees a plan slot. Re-select it in the sync picker later to add it back.",
+      security: bearer,
+      parameters: [idPath],
+      responses: ok("Product removed from sync, with updated slot usage"),
+    },
+  },
+
   "/prompts/win-dashboard": {
     get: {
       tags: ["Prompts"],
-      summary: "Prompt Win Dashboard — Win / Improve / Missing",
+      summary: "Prompt Win Dashboard — lightweight summary (counts + coverage)",
+      description:
+        "Returns visibility counts, coverage ring data, and plan limits only. For the actual prompt list, see /prompts/win-dashboard/prompts.",
       security: bearer,
       parameters: [
         {
@@ -469,6 +544,38 @@ const openapiPaths = {
           schema: { type: "string" },
           description: "Optional filter by product",
         },
+      ],
+      responses: ok("Prompt win summary"),
+    },
+  },
+
+  "/prompts/win-dashboard/prompts": {
+    get: {
+      tags: ["Prompts"],
+      summary: "Paginated, categorized prompt list — the 4 dashboard tabs",
+      security: bearer,
+      parameters: [
+        {
+          name: "category",
+          in: "query",
+          schema: {
+            type: "string",
+            enum: ["missing", "improve", "winning", "all"],
+            default: "all",
+          },
+          description:
+            "missing = Losing (LOW visibility), improve = MEDIUM, winning = HIGH, all = no visibility filter",
+        },
+        {
+          name: "page",
+          in: "query",
+          schema: { type: "integer", default: 1 },
+        },
+        {
+          name: "limit",
+          in: "query",
+          schema: { type: "integer", default: 20, maximum: 50 },
+        },
         {
           name: "search",
           in: "query",
@@ -476,13 +583,13 @@ const openapiPaths = {
           description: "Optional search term to filter prompts by text",
         },
         {
-          name: "searchLimit",
+          name: "productId",
           in: "query",
-          schema: { type: "integer", default: 20, maximum: 50 },
-          description: "Max results in searchResults when search is used",
+          schema: { type: "string" },
+          description: "Optional filter by product",
         },
       ],
-      responses: ok("Prompt win summary"),
+      responses: ok("Paginated prompt list with pagination metadata"),
     },
   },
 

@@ -6,6 +6,12 @@ import {
   enforceProductAnalysisLimit,
   enforceProductSyncLimit,
 } from "../middleware/plan-limits.js"
+import {
+  singleAnalyseGuard,
+  bulkAnalyseGuard,
+  loadBulkTargets,
+  filterBulkReanalysisTargets,
+} from "../middleware/guards.js"
 import { aiLimiter } from "../middleware/rate-limiter.js"
 
 router.use(authenticate)
@@ -15,15 +21,17 @@ router.get("/", ctrl.listProducts)
 router.get("/shopify-search", ctrl.searchShopifyProducts)
 router.post("/sync-selected", enforceProductSyncLimit(), ctrl.syncSelected)
 router.post("/sync", ctrl.syncProducts)
-router.post("/analyse-bulk", aiLimiter, ctrl.analyseBulk)
+router.post(
+  "/analyse-bulk",
+  aiLimiter,
+  loadBulkTargets,
+  filterBulkReanalysisTargets,
+  bulkAnalyseGuard,
+  ctrl.analyseBulk,
+)
 router.get("/jobs/:jobId", ctrl.checkJobStatus)
 router.get("/:id", ctrl.getProduct)
-router.post(
-  "/:id/analyse",
-  aiLimiter,
-  enforceProductAnalysisLimit(),
-  ctrl.analyseProduct,
-)
+router.post("/:id/analyse", aiLimiter, singleAnalyseGuard, ctrl.analyseProduct)
 router.get("/:id/analysis", ctrl.getAnalyses)
 router.get("/:id/competitors", ctrl.getCompetitorBenchmark)
 router.post("/:id/optimise", ctrl.optimiseProduct)

@@ -1111,7 +1111,7 @@ ${(smartPrompts.prompts || [])
   .map((p, i) => `${i + 1}. "${p.prompt}" (intent: ${p.intent})`)
   .join("\n")}
 
-Return this exact JSON. For "scoreBreakdown" and "engineCoverage": each field below shows a description of what to score and its valid range in quotes — replace that description with your actual computed INTEGER for that field (e.g. "productClarity": 16), never return the description text itself:
+Return this exact JSON:
 {
   "bestFor": ["specific use-case phrases grounded in the actual buyer persona"],
   "intentKeywords": ["conversational search phrases this specific buyer would type"],
@@ -1139,18 +1139,18 @@ Return this exact JSON. For "scoreBreakdown" and "engineCoverage": each field be
   "optimizedTitle": "Improved title with semantic clarity for AI engines",
   "optimizedDescription": "Improved HTML description: (1) open with primary use case, (2) address buyer motivation, (3) list specific attributes, (4) handle top 2 objections, (5) include trust signals. No FAQ section here.",
   "scoreBreakdown": {
-    "productClarity": "0-20 — how unambiguously the product identity, category, and core function come through",
-    "audienceSignals": "0-15 — how clearly the buyer persona, motivation, and purchase trigger are established",
-    "useCaseDepth": "0-20 — how specific and well-covered the use cases and situational contexts are",
-    "trustAndCredibility": "0-15 — presence of trust signals: materials/certifications, reviews, guarantees, brand credibility",
-    "faqAndObjections": "0-15 — how well buyer objections are anticipated and answered via FAQ/description",
-    "promptReadiness": "0-15 — how directly this product's content would satisfy real conversational shopping queries"
+    "productClarity": 0,
+    "audienceSignals": 0,
+    "useCaseDepth": 0,
+    "trustAndCredibility": 0,
+    "faqAndObjections": 0,
+    "promptReadiness": 0
   },
   "engineCoverage": {
-    "chatgpt": "0-100 — ChatGPT Shopping favors clear structured attributes (material, size, price, specs) and unambiguous category fit. Score LOW if attributes are vague/missing, HIGH if the product data has explicit, structured specs an engine can extract cleanly.",
-    "perplexity": "0-100 — Perplexity favors citable trust signals: reviews, certifications, guarantees, third-party validation, specific claims it can quote. Score LOW if trustSignals above is sparse/generic, HIGH if there are multiple specific, citable trust claims.",
-    "gemini": "0-100 — Gemini favors comparison-ready content: how this product stacks up against alternatives, differentiators, and structured pros/cons. Score LOW if comparisonOpportunities/differentiators are thin, HIGH if the product's competitive position is clearly articulated.",
-    "aiOverview": "0-100 — Google AI Overviews favors FAQ/snippet-style content that directly answers specific questions. Score LOW if existingFaqs/faq above are sparse or don't address real buyer objections, HIGH if there's substantial, specific Q&A content."
+    "chatgpt": 0,
+    "perplexity": 0,
+    "gemini": 0,
+    "aiOverview": 0
   },
   "prioritizedFixes": [
     {
@@ -1833,7 +1833,7 @@ function attemptJsonRepair(text) {
     }
     // Trim any trailing comma before we close things off.
     repaired = repaired.replace(/,\s*$/, "")
-
+ 
     const stack = []
     let inString = false
     let escaped = false

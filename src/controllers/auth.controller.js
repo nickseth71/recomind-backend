@@ -440,7 +440,14 @@ import logger from "../config/logger.js"
  */
 async function registerStore(req, res, next) {
   try {
-    let { shop, accessToken, scope } = req.body
+    let {
+      shop,
+      accessToken,
+      scope,
+      refreshToken,
+      expiresAt,
+      refreshTokenExpiresAt,
+    } = req.body
 
     if (!shop || !accessToken) {
       return res.status(400).json({
@@ -464,6 +471,14 @@ async function registerStore(req, res, next) {
     }
 
     store.setAccessToken(accessToken)
+    // Refresh token support (Shopify's expiring offline access token model).
+    // Older sessions or reinstalls before this was wired up may not send
+    // these — only touch the fields when actually present, so we never
+    // overwrite a good stored refresh token with nothing.
+    if (refreshToken) store.setRefreshToken(refreshToken)
+    if (expiresAt) store.accessTokenExpiresAt = new Date(expiresAt)
+    if (refreshTokenExpiresAt)
+      store.refreshTokenExpiresAt = new Date(refreshTokenExpiresAt)
     store.scope = scope
     store.shopName = shopInfo.name
     store.shopEmail = shopInfo.email

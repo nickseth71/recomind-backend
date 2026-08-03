@@ -21,6 +21,20 @@ const storeSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    // Refresh token (Shopify's expiring offline access token model, opt-in
+    // since Dec 2025). Also AES-encrypted at rest, same as the access token.
+    refreshTokenEncrypted: {
+      type: String,
+      default: null,
+    },
+    accessTokenExpiresAt: {
+      type: Date,
+      default: null,
+    },
+    refreshTokenExpiresAt: {
+      type: Date,
+      default: null,
+    },
     scope: {
       type: String,
       required: true,
@@ -119,6 +133,14 @@ storeSchema.virtual("accessToken").get(function () {
   return bytes.toString(CryptoJS.enc.Utf8)
 })
 
+// Virtual: decode refresh token
+storeSchema.virtual("refreshToken").get(function () {
+  if (!this.refreshTokenEncrypted) return null
+  const key = process.env.ENCRYPTION_KEY
+  const bytes = CryptoJS.AES.decrypt(this.refreshTokenEncrypted, key)
+  return bytes.toString(CryptoJS.enc.Utf8)
+})
+
 // Auto-encrypt before save
 storeSchema.pre("save", function (next) {
   if (this.isModified("accessTokenEncrypted")) return next()
@@ -134,6 +156,18 @@ storeSchema.methods.setAccessToken = function (plainToken) {
 // Helper: decrypt and return token for Shopify API calls
 storeSchema.methods.getAccessToken = function () {
   return this.accessToken || null
+}
+
+// Helper: encrypt and set refresh token
+storeSchema.methods.setRefreshToken = function (plainToken) {
+  if (!plainToken) return
+  const key = process.env.ENCRYPTION_KEY
+  this.refreshTokenEncrypted = CryptoJS.AES.encrypt(plainToken, key).toString()
+}
+
+// Helper: decrypt and return refresh token
+storeSchema.methods.getRefreshToken = function () {
+  return this.refreshToken || null
 }
 
 // Check plan features (includes paid add-ons)
@@ -259,6 +293,36 @@ storeSchema.pre("save", function (next) {
   }
   next()
 })
+
+// Refund tokens (e.g. a job that was pre-charged at enqueue time ultimately
+// failed). Atomic and clamped at 0 — uses an aggregation-pipeline update so
+// concurrent refunds/deductions can never push the counter negative or lose
+// each other's changes, same reasoning as deductTokens.
+storeSchema.methods.refundTokens = async function (amount) {
+  if (!amount || amount <= 0) return null
+  const Store = this.constructor
+  const updated = await Store.findOneAndUpdate(
+    { _id: this._id },
+    [
+      {
+        $set: {
+          tokensUsedThisMonth: {
+            $max: [0, { $subtract: ["$tokensUsedThisMonth", amount] }],
+          },
+          lifetimeTokensUsed: {
+            $max: [0, { $subtract: ["$lifetimeTokensUsed", amount] }],
+          },
+        },
+      },
+    ],
+    { new: true },
+  )
+  if (updated) {
+    this.tokensUsedThisMonth = updated.tokensUsedThisMonth
+    this.lifetimeTokensUsed = updated.lifetimeTokensUsed
+  }
+  return updated
+}
 
 const Store = mongoose.model("Store", storeSchema)
 export default Store

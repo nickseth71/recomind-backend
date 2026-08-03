@@ -11,7 +11,8 @@ import logger from "../config/logger.js"
 
 /**
  * GET /api/prompts/win-dashboard
- * Prompt Win Dashboard — can win / improve / missing summary.
+ * Prompt Win Dashboard — lightweight summary (counts + coverage only).
+ * For the actual prompt lists, see GET /api/prompts/win-dashboard/prompts.
  */
 async function getWinDashboard(req, res, next) {
   try {
@@ -27,14 +28,44 @@ async function getWinDashboard(req, res, next) {
     const data = await promptWinService.getPromptWinDashboard(
       req.store._id,
       req.store,
-      {
-        productId: req.query.productId,
-        search: req.query.search, // NEW
-        searchLimit: req.query.searchLimit
-          ? Math.min(Number(req.query.searchLimit), 50) // cap to avoid abuse
-          : undefined,
-      },
+      { productId: req.query.productId },
     )
+
+    res.json({ success: true, data })
+  } catch (err) {
+    next(err)
+  }
+}
+
+/**
+ * GET /api/prompts/win-dashboard/prompts
+ * Paginated, categorized prompt list — the 4 dashboard tabs.
+ * Query: category=missing|improve|winning|all, page, limit, search, productId
+ */
+async function getWinDashboardPrompts(req, res, next) {
+  try {
+    if (!req.store.hasFeature("promptWinDashboard")) {
+      return res.status(403).json({
+        success: false,
+        error: "Prompt Win Dashboard requires a plan upgrade",
+        requiredFeature: "promptWinDashboard",
+        currentPlan: req.store.plan,
+      })
+    }
+
+    const category = ["missing", "improve", "winning", "all"].includes(
+      req.query.category,
+    )
+      ? req.query.category
+      : "all"
+
+    const data = await promptWinService.getPaginatedPrompts(req.store._id, {
+      category,
+      page: req.query.page,
+      limit: req.query.limit,
+      search: req.query.search,
+      productId: req.query.productId,
+    })
 
     res.json({ success: true, data })
   } catch (err) {
@@ -488,4 +519,5 @@ export {
   simulatePrompt,
   analysePromptIntelligence,
   getSimulationHistory,
+  getWinDashboardPrompts,
 }
