@@ -500,26 +500,26 @@ async function registerStore(req, res, next) {
     // mismatch between the token we just saved and the one received in
     // the request body (helps when tokens are rotated or persistence
     // modifies the stored value).
-    const topics = [
-      "products/create",
-      "products/update",
-      "products/delete",
-      "app/uninstalled",
-      "markets/update",
-    ]
+    // const topics = [
+    //   "products/create",
+    //   "products/update",
+    //   "products/delete",
+    //   "app/uninstalled",
+    //   "markets/update",
+    // ]
 
-    const storedToken = store.getAccessToken()
-    logger.info(
-      `Registering webhooks for ${shop} using stored token preview ${storedToken ? storedToken.slice(0, 6) + "..." : "none"}`,
-    )
+    // const storedToken = store.getAccessToken()
+    // logger.info(
+    //   `Registering webhooks for ${shop} using stored token preview ${storedToken ? storedToken.slice(0, 6) + "..." : "none"}`,
+    // )
 
-    console.log("token for register webhook", storedToken)
+    // //console.log("token for register webhook", storedToken)
 
-    await Promise.allSettled(
-      topics.map((topic) =>
-        shopifyService.registerWebhook(shop, storedToken, topic),
-      ),
-    )
+    // await Promise.allSettled(
+    //   topics.map((topic) =>
+    //     shopifyService.registerWebhook(shop, storedToken, topic),
+    //   ),
+    // )
 
     // NOTE: we no longer auto-sync all products on install. The frontend
     // now shows a picker (search + select, respecting the plan's sync

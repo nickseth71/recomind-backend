@@ -1,3 +1,4 @@
+import mongoose from "mongoose"
 import Store from "../models/store.model.js"
 import Product from "../models/product.model.js"
 import AuditLog from "../models/auditlog.model.js"
@@ -91,6 +92,10 @@ async function handleAppUninstalled(req, res) {
   res.sendStatus(200)
   try {
     const shop = req.shopDomain
+
+    // Remove the Shopify app session record(s) stored by Prisma session storage.
+    await mongoose.connection.collection("Session").deleteMany({ shop })
+
     await Store.findOneAndUpdate(
       { shopDomain: shop },
       { isActive: false, uninstalledAt: new Date() },
@@ -129,5 +134,5 @@ export {
   handleProductUpdate,
   handleProductDelete,
   handleAppUninstalled,
-  handleMarketsUpdate
+  handleMarketsUpdate,
 }
