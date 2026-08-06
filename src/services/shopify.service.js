@@ -1659,22 +1659,27 @@ async function fetchProductsByIds(shop, accessToken, shopifyProductIds = []) {
 async function registerWebhook(shop, accessToken, topic) {
   const address = `${process.env.APP_URL}/api/webhooks/${topic.replace("/", "-")}`
   try {
-    await shopifyHttp.post(
+    const res = await shopifyHttp.post(
       `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/webhooks.json`,
       { webhook: { topic, address, format: "json" } },
       { headers: { "X-Shopify-Access-Token": accessToken } },
     )
-    logger.info(`Webhook registered: ${topic} → ${address}`)
+    logger.info(
+      `Webhook registered: ${topic} → ${address} (status=${res.status})`,
+    )
+    logger.debug(
+      `Webhook registration response body: ${JSON.stringify(res.data)}`,
+    )
   } catch (err) {
     // Ignore duplicate webhook errors
     if (
       err.response?.data?.errors?.address?.[0] !==
       "for this topic has already been taken"
     ) {
-      logger.warn(
-        `Webhook registration failed for ${topic}:`,
-        err.response?.data,
-      )
+      logger.warn(`Webhook registration failed for ${topic}: ${err.message}`)
+      if (err.response) {
+        logger.warn(`Shopify response: ${JSON.stringify(err.response.data)}`)
+      }
     }
   }
 }

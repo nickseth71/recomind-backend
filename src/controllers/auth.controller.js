@@ -496,7 +496,10 @@ async function registerStore(req, res, next) {
     await store.save()
     logger.info(`Store ${isNew ? "created" : "updated"}: ${shop}`)
 
-    // Register webhooks
+    // Register webhooks using the stored access token to avoid any
+    // mismatch between the token we just saved and the one received in
+    // the request body (helps when tokens are rotated or persistence
+    // modifies the stored value).
     const topics = [
       "products/create",
       "products/update",
@@ -504,9 +507,15 @@ async function registerStore(req, res, next) {
       "app/uninstalled",
       "markets/update",
     ]
+
+    const storedToken = store.getAccessToken()
+    logger.info(
+      `Registering webhooks for ${shop} using stored token preview ${storedToken ? storedToken.slice(0, 6) + "..." : "none"}`,
+    )
+
     await Promise.allSettled(
       topics.map((topic) =>
-        shopifyService.registerWebhook(shop, accessToken, topic),
+        shopifyService.registerWebhook(shop, storedToken, topic),
       ),
     )
 

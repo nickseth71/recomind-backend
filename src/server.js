@@ -29,6 +29,15 @@ app.use(
   webhookRoutes,
 )
 
+// Also accept app-level webhook deliveries that use the manifest path
+// (e.g. `/webhooks/app/uninstalled`) so app-level subscriptions hit
+// the same handlers as store-level registrations.
+app.use(
+  "/webhooks",
+  express.raw({ type: "application/json" }),
+  webhookRoutes,
+)
+
 app.use(helmet({ contentSecurityPolicy: false }))
 app.use(
   cors(),
