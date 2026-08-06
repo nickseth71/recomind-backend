@@ -810,7 +810,7 @@ import crypto from "crypto"
 import logger from "../config/logger.js"
 import shopifyHttp from "../utils/shopify-http.js"
 
-const SHOPIFY_API_VERSION = "2025-10"
+const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || "2026-07"
 const RECOMIND_METAFIELD_NAMESPACE = "RecoMind"
 
 /**
@@ -1667,7 +1667,7 @@ async function registerWebhook(shop, accessToken, topic) {
     logger.info(
       `Webhook registered: ${topic} → ${address} (status=${res.status})`,
     )
-    logger.debug(
+    logger.info(
       `Webhook registration response body: ${JSON.stringify(res.data)}`,
     )
   } catch (err) {
