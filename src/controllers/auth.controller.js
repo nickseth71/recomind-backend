@@ -513,6 +513,8 @@ async function registerStore(req, res, next) {
       `Registering webhooks for ${shop} using stored token preview ${storedToken ? storedToken.slice(0, 6) + "..." : "none"}`,
     )
 
+    console.log("token for register webhook", storedToken)
+
     await Promise.allSettled(
       topics.map((topic) =>
         shopifyService.registerWebhook(shop, storedToken, topic),
