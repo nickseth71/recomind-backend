@@ -30,11 +30,19 @@ async function refreshAccessToken(store) {
     throw new Error(`No refresh token stored for ${store.shopDomain}`)
   }
 
+  const shopifyApiKey = process.env.SHOPIFY_API_KEY
+  const shopifyApiSecret = process.env.SHOPIFY_API_SECRET
+  if (!shopifyApiKey || !shopifyApiSecret) {
+    throw new Error(
+      "Missing Shopify API credentials: SHOPIFY_API_KEY and SHOPIFY_API_SECRET must be set",
+    )
+  }
+
   const response = await axios.post(
     `https://${store.shopDomain}/admin/oauth/access_token`,
     new URLSearchParams({
-      client_id: process.env.SHOPIFY_API_KEY,
-      client_secret: process.env.SHOPIFY_WEBHOOK_SECRET,
+      client_id: shopifyApiKey,
+      client_secret: shopifyApiSecret,
       grant_type: "refresh_token",
       refresh_token: refreshToken,
     }),
