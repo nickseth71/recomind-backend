@@ -34,7 +34,7 @@ async function refreshAccessToken(store) {
     `https://${store.shopDomain}/admin/oauth/access_token`,
     new URLSearchParams({
       client_id: process.env.SHOPIFY_API_KEY,
-      client_secret: process.env.SHOPIFY_API_SECRET,
+      client_secret: process.env.SHOPIFY_WEBHOOK_SECRET,
       grant_type: "refresh_token",
       refresh_token: refreshToken,
     }),
