@@ -114,6 +114,7 @@ shopifyHttp.interceptors.response.use(
     } catch (refreshErr) {
       logger.error(
         `Token refresh failed for ${shopDomain}: ${refreshErr.message}`,
+        refreshErr.response?.data || refreshErr.stack,
       )
       return Promise.reject(error)
     }
