@@ -465,6 +465,7 @@ async function registerStore(req, res, next) {
     // Upsert our Store record
     let store = await Store.findOne({ shopDomain: shop })
     const isNew = !store
+    const wasInactive = store?.isActive === false
 
     if (!store) {
       store = new Store({ shopDomain: shop, plan: "starter" })
@@ -531,13 +532,13 @@ async function registerStore(req, res, next) {
     })
 
     // Audit log
-    if (isNew || store.isActive !== true) {
+    if (isNew || wasInactive) {
       await AuditLog.create({
         storeId: store._id,
-        action: "STORE_INSTALLED",
+        action: wasInactive ? "STORE_REACTIVATED" : "STORE_INSTALLED",
         entityType: "store",
         entityId: store._id,
-        metadata: { isNew, shopName: shopInfo.name },
+        metadata: { isNew, wasInactive, shopName: shopInfo.name },
         performedBy: "afterAuth",
       })
     }
