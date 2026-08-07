@@ -21,6 +21,7 @@ const auditLogSchema = new mongoose.Schema(
         "BULK_OPTIMISE_COMPLETED",
         "PRODUCTS_SYNCED",
         "STORE_INSTALLED",
+        "STORE_REACTIVATED",
         "STORE_UNINSTALLED",
         "PLAN_CHANGED",
         "REPORT_EXPORTED",
