@@ -831,7 +831,7 @@ export const SCORE_WEIGHTS = {
 // Sending raw descriptionHtml (several KB of markup) bloats the
 // prompt and slows the API call significantly on every stage.
 // ─────────────────────────────────────────────────────────────
-function cleanDescription(product, maxChars = 3500) {
+function cleanDescription(product, maxChars = 8000) {
   const raw = product.description || product.descriptionHtml || ""
   return raw
     .replace(/<[^>]*>/g, " ")
@@ -848,7 +848,7 @@ function cleanDescription(product, maxChars = 3500) {
  * ids their theme's CSS may depend on) if it never saw that structure
  * in the first place.
  */
-function getRawDescriptionHtml(product, maxChars = 4000) {
+function getRawDescriptionHtml(product, maxChars = 10000) {
   const raw = product.descriptionHtml || product.description || ""
   const hasRealMarkup = /<[a-z][\s\S]*>/i.test(raw)
   if (!hasRealMarkup) return null
@@ -969,7 +969,7 @@ Price Range: ${pricingContext}
 Tags: ${tagSignals}
 Collections: ${collectionSignals}
 Description (plain text):
-${cleanDescription(product, 2200) || "Not provided"}
+${cleanDescription(product)}
 
 ${variantSignals ? `Variants / Options:\n${variantSignals}` : ""}
 ${reviewSignals ? `Review Signals:\n${reviewSignals}` : ""}
@@ -1117,7 +1117,7 @@ Respond ONLY with valid JSON. No markdown, no code fences.`
 
 PRODUCT DATA:
 Title: ${product.title}
-Description: ${cleanDescription(product, 3500) || "Not provided"}
+Description: ${cleanDescription(product)}
 Tags: ${(product.tags || []).join(", ") || "None"}
 Vendor: ${product.vendor || "Not specified"}
 Type: ${product.productType || "Not specified"}
