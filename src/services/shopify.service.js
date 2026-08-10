@@ -883,14 +883,30 @@ function verifyWebhookHmac(rawBody, hmacHeader) {
  */
 async function fetchProductCollections(shop, accessToken, shopifyProductId) {
   try {
-    const res = await shopifyHttp.get(
-      `https://${shop}/admin/api/${SHOPIFY_API_VERSION}/products/${shopifyProductId}/collections.json?fields=id,title,handle`,
-      { headers: { "X-Shopify-Access-Token": accessToken } },
-    )
-    return (res.data.collections || []).map((c) => ({
-      shopifyCollectionId: String(c.id),
-      title: c.title,
-      handle: c.handle,
+    const query = `
+      query ProductCollections($id: ID!) {
+        product(id: $id) {
+          collections(first: 20) {
+            edges {
+              node {
+                id
+                title
+                handle
+              }
+            }
+          }
+        }
+      }
+    `
+    const data = await graphqlQuery(shop, accessToken, query, {
+      id: `gid://shopify/Product/${shopifyProductId}`,
+    })
+
+    const edges = data?.product?.collections?.edges || []
+    return edges.map(({ node }) => ({
+      shopifyCollectionId: node.id.split("/").pop(),
+      title: node.title,
+      handle: node.handle,
     }))
   } catch (err) {
     logger.warn(

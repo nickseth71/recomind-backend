@@ -845,18 +845,16 @@ async function generateAndScorePrompts(
           const rawScore = r.intentCoverageScore ?? 0
           const insights = buildPromptInsights(r, analysis)
 
-          // If Stage 3 already gave a winProbability for this prompt,
-          // lock the visibility bucket to that and clamp the AI's
-          // fresh score into the matching band. Otherwise let the
-          // AI score determine visibility from scratch (manual prompts,
-          // legacy templates).
-          const visibility = meta.winProbability
-            ? winProbabilityToVisibility(meta.winProbability)
-            : scoreToVisibility(rawScore)
-
-          const score = meta.winProbability
-            ? clampScoreToBand(rawScore, visibility)
-            : rawScore
+          // The score computed HERE has fuller context (matched/missing
+          // attributes, comparison, etc.) than Stage 3's earlier coarse
+          // winProbability guess — so it's the source of truth for both
+          // the number AND the bucket. We no longer clamp it to match
+          // Stage 3's prediction; forcing a well-informed score to match
+          // a cruder earlier one is what caused scores to pile up at
+          // exactly the band floor (40/70) instead of reflecting the
+          // real per-prompt variance.
+          const score = rawScore
+          const visibility = scoreToVisibility(score)
 
           return {
             prompt: promptText,
@@ -892,16 +890,9 @@ async function generateAndScorePrompts(
             product,
             analysis,
           )
-          const meta = promptObj
-          if (meta.winProbability) {
-            const visibility = winProbabilityToVisibility(meta.winProbability)
-            single.visibility = visibility
-            single.intentCoverageScore = clampScoreToBand(
-              single.intentCoverageScore ?? 0,
-              visibility,
-            )
-            single.statusMessage = visibilityMessage(visibility, single.prompt)
-          }
+          // scorePromptForProduct already derives visibility from its own
+          // intentCoverageScore via scoreToVisibility() — no override here
+          // (see note above on why re-clamping to Stage 3's guess is wrong).
           allScored.push(single)
         } catch (e) {
           logger.warn(`Failed to score "${promptObj.prompt}": ${e.message}`)

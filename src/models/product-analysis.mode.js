@@ -158,6 +158,30 @@ const productAnalysisSchema = new mongoose.Schema(
     optimizedTitle: String,
     optimizedDescription: String,
 
+    // ── Category-aware attribute detection ──────────────────────────
+    // Which product-category this analysis used to decide which
+    // attributes are even relevant (e.g. nutrition for Food, but NOT
+    // for a t-shirt), and the per-attribute checklist that resulted.
+    categoryAttributeChecklist: {
+      detectedCategory: String,
+      attributes: [
+        {
+          attribute: String,
+          status: {
+            type: String,
+            enum: [
+              "present",
+              "present_unstructured",
+              "missing",
+              "not_applicable",
+            ],
+          },
+          evidence: String,
+          recommendation: String,
+        },
+      ],
+    },
+
     // ── Prioritized fixes (new — from Stage 2) ────────────────────────
     prioritizedFixes: [
       {

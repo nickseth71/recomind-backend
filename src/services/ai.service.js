@@ -831,13 +831,28 @@ export const SCORE_WEIGHTS = {
 // Sending raw descriptionHtml (several KB of markup) bloats the
 // prompt and slows the API call significantly on every stage.
 // ─────────────────────────────────────────────────────────────
-function cleanDescription(product, maxChars = 1500) {
+function cleanDescription(product, maxChars = 3500) {
   const raw = product.description || product.descriptionHtml || ""
   return raw
     .replace(/<[^>]*>/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, maxChars)
+}
+
+/**
+ * Raw (untouched) descriptionHtml, for the ONE place the AI actually
+ * needs to see real markup: generating optimizedDescription. Without
+ * this, the AI only ever sees cleanDescription()'s tag-stripped text —
+ * it can't preserve a merchant's existing HTML structure (divs, classes,
+ * ids their theme's CSS may depend on) if it never saw that structure
+ * in the first place.
+ */
+function getRawDescriptionHtml(product, maxChars = 4000) {
+  const raw = product.descriptionHtml || product.description || ""
+  const hasRealMarkup = /<[a-z][\s\S]*>/i.test(raw)
+  if (!hasRealMarkup) return null
+  return raw.slice(0, maxChars)
 }
 
 function buildStoreMarketContext(store = null) {
@@ -954,7 +969,7 @@ Price Range: ${pricingContext}
 Tags: ${tagSignals}
 Collections: ${collectionSignals}
 Description (plain text):
-${cleanDescription(product, 1500) || "Not provided"}
+${cleanDescription(product, 2200) || "Not provided"}
 
 ${variantSignals ? `Variants / Options:\n${variantSignals}` : ""}
 ${reviewSignals ? `Review Signals:\n${reviewSignals}` : ""}
@@ -1069,6 +1084,22 @@ You have the raw product data AND a deep product interpretation. Score the produ
 
 Do NOT give generic advice. Every suggestion must be specific to THIS product and THIS audience.
 
+CATEGORY-AWARE ATTRIBUTE DETECTION — this is critical, follow it exactly:
+Different product categories need different information to be AI-visible. A food product needs ingredients/allergens/nutrition; a t-shirt needs material/fit/sizing; nutrition information on a t-shirt is meaningless noise, and demanding it is a mistake. Reference table of category → relevant attributes:
+- Food & Beverage: ingredients, allergens, nutrition facts, flavor, weight/volume, dietary claims (vegan, gluten-free, etc.)
+- Beauty: ingredients, skin/hair type suitability, benefits, usage instructions, concerns addressed, certifications
+- Grooming: ingredients, use case, skin/hair type, benefits, size, fragrance
+- Healthcare/Wellness: active ingredients, dosage/usage, benefits, warnings, suitability
+- Clothing/Apparel: material, fit, size range, color options, style, care instructions
+- Footwear: size, material, fit, cushioning, use case, terrain
+- Jewellery: material, gemstone, dimensions, occasion, care instructions, certification
+- Electronics: specifications, compatibility, dimensions, warranty, use cases
+- Other/unlisted categories: use judgment based on what a real buyer of this specific product would need to know before purchasing.
+
+Your job for THIS product: (1) confirm which of the categories above (or a close analog) it belongs to, (2) identify ONLY the attributes relevant to that category, (3) check the ENTIRE product data you were given (title, description, tags) for each relevant attribute — including attributes mentioned in passing inside unstructured paragraph text, not just formal spec tables — (4) classify each as present / present but poorly structured (buried in a paragraph instead of clearly stated) / missing / not applicable to this category, (5) only recommend fixes for attributes that are BOTH relevant to this category AND actually missing or poorly structured. Never recommend an attribute from a category this product doesn't belong to (e.g. never suggest nutrition facts for apparel).
+
+If you find a relevant attribute stated in unstructured text (e.g. a sugar content buried in a paragraph), that counts as "present but poorly structured" — recommend restructuring it for clarity, do NOT report it as missing.
+
 Respond ONLY with valid JSON. No markdown, no code fences.`
 
   const existingFaqs = product.existingFaqs || []
@@ -1077,15 +1108,22 @@ Respond ONLY with valid JSON. No markdown, no code fences.`
       ? `EXISTING FAQs (${existingFaqs.length}):\n${existingFaqs.map((f, i) => `${i + 1}. Q: ${f.question}\n   A: ${f.answer}`).join("\n")}`
       : `NO EXISTING FAQs. Generate FAQs addressing: (1) buyer objections, (2) use case questions, (3) comparison questions vs direct competitors.`
 
+  const rawHtml = getRawDescriptionHtml(product)
+  const htmlStructureContext = rawHtml
+    ? `RAW DESCRIPTION HTML (existing markup — you MUST preserve this exact structure when writing optimizedDescription; only change the readable text inside it, never invent, remove, or rename a tag/class/id):\n${rawHtml}`
+    : `RAW DESCRIPTION HTML: none — this product has no meaningful existing HTML structure (plain text only). For optimizedDescription, generate clean semantic HTML from scratch using only basic tags (p, ul, li, strong) with no classes or ids.`
+
   const userPrompt = `Analyse this product for AI recommendation readiness.
 
 PRODUCT DATA:
 Title: ${product.title}
-Description: ${cleanDescription(product, 1200) || "Not provided"}
+Description: ${cleanDescription(product, 3500) || "Not provided"}
 Tags: ${(product.tags || []).join(", ") || "None"}
 Vendor: ${product.vendor || "Not specified"}
 Type: ${product.productType || "Not specified"}
 ${buildPricingContext(product) ? `Price: ${buildPricingContext(product)}` : ""}
+
+${htmlStructureContext}
 
 PRODUCT INTERPRETATION (Stage 1):
 Product Identity: ${interpretation.productIdentity?.coreProduct}
@@ -1137,7 +1175,18 @@ Return this exact JSON. For "scoreBreakdown" and "engineCoverage": each field be
     "objectionsUncovered": []
   },
   "optimizedTitle": "Improved title with semantic clarity for AI engines",
-  "optimizedDescription": "Improved HTML description: (1) open with primary use case, (2) address buyer motivation, (3) list specific attributes, (4) handle top 2 objections, (5) include trust signals. No FAQ section here.",
+  "optimizedDescription": "Rewritten description following the RAW DESCRIPTION HTML instructions above (preserve existing structure if present, or generate clean minimal HTML if not). Content must: (1) open with primary use case, (2) address buyer motivation, (3) state specific attributes clearly (including any found buried in unstructured text — restructure them, don't drop them), (4) handle top 2 objections, (5) include trust signals. No FAQ section here.",
+  "categoryAttributeChecklist": {
+    "detectedCategory": "the product category you determined from the reference table (or closest analog)",
+    "attributes": [
+      {
+        "attribute": "name of a category-relevant attribute, e.g. Ingredients, Material, Nutrition",
+        "status": "present | present_unstructured | missing | not_applicable",
+        "evidence": "quote or close paraphrase of where you found it in the product data, empty string if missing/not_applicable",
+        "recommendation": "what to fix, only for present_unstructured or missing — empty string for present/not_applicable"
+      }
+    ]
+  },
   "scoreBreakdown": {
     "productClarity": "0-20 — how unambiguously the product identity, category, and core function come through",
     "audienceSignals": "0-15 — how clearly the buyer persona, motivation, and purchase trigger are established",
@@ -1468,7 +1517,7 @@ PRODUCT:
 
 ${marketContext.promptText}
 
-Return JSON:
+Return JSON. For "intentCoverageScore": replace the description in quotes with your actual computed INTEGER (e.g. "intentCoverageScore": 62), never return the description text itself.
 {
   "buyerIntent": "what the buyer wants to achieve",
   "queryType": "ingredient-specific | budget-conscious | use-case-driven | comparison | problem-solution | brand-specific | other",
@@ -1479,7 +1528,7 @@ Return JSON:
   "rankingFactors": ["core factors that would improve ranking for this prompt"],
   "competitorDominating": ["brand or product competitors likely dominating this prompt"],
   "semanticGaps": ["semantic gaps between the prompt and the product content"],
-  "intentCoverageScore": 0,
+  "intentCoverageScore": "0-100 INTEGER — score how completely the product's actual content (not assumptions) answers this specific prompt. 0-25: the product is missing most of what the prompt needs, an AI engine would likely not surface it. 26-50: partial coverage, several important gaps remain. 51-75: solid coverage, most buyer-relevant attributes present but not fully optimized. 76-100: comprehensive, explicit coverage — an AI engine has everything needed to confidently recommend this product for this exact query. Base this on matchedAttributes vs missingSignals above, not a generic guess.",
   "recommendations": ["3–5 specific actionable fixes"],
   "recommendedActions": ["recommended actions to improve visibility for this prompt"],
   "reasoning": "1 sentence verdict"
@@ -1530,7 +1579,7 @@ ${prompts.map((p, i) => `${i + 1}. "${p}"`).join("\n")}
 
 ${marketContext.promptText}
 
-Return JSON array (one object per prompt, same order):
+Return JSON array (one object per prompt, same order). For "intentCoverageScore": replace the description with your actual computed INTEGER, never the description text itself.
 [{
   "prompt": "exact prompt text",
   "buyerIntent": "...",
@@ -1542,7 +1591,7 @@ Return JSON array (one object per prompt, same order):
   "rankingFactors": ["..."],
   "competitorDominating": ["..."],
   "semanticGaps": ["..."],
-  "intentCoverageScore": 0,
+  "intentCoverageScore": "0-100 INTEGER — score how completely the product's actual content (not assumptions) answers THIS specific prompt. 0-25: missing most of what the prompt needs. 26-50: partial coverage, several gaps remain. 51-75: solid coverage, most buyer-relevant attributes present but not fully optimized. 76-100: comprehensive, explicit coverage. Base this on matchedAttributes vs missingSignals for THIS prompt, not a generic guess — different prompts for the same product should often get different scores.",
   "recommendations": ["specific fixes for THIS product for THIS prompt"],
   "recommendedActions": ["..."],
   "reasoning": "..."

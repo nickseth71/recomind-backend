@@ -317,7 +317,6 @@ function normalizeFaqAnalysis(faqAnalysis = {}) {
 
   return { ...faqAnalysis, action, recommendedStrategy }
 }
- 
 
 function generateProductHash(product) {
   const content = JSON.stringify({
@@ -400,7 +399,7 @@ async function processAnalysisJob(productId, storeId, job) {
       result.faqAnalysis ||
       analyzeFaqState(product.existingFaqs, result.faq, result.scoreBreakdown)
     const faqAnalysis = normalizeFaqAnalysis(rawFaqAnalysis)
-    
+
     const store = await Store.findById(storeId)
     const planLimits = getPromptLimits(store.plan, store.addons || {})
     const competitorBenchmark = aiService.buildCompetitorBenchmark(
@@ -448,6 +447,9 @@ async function processAnalysisJob(productId, storeId, job) {
       // Optimized content
       optimizedTitle: result.optimizedTitle,
       optimizedDescription: result.optimizedDescription,
+
+      // Category-aware attribute detection
+      categoryAttributeChecklist: result.categoryAttributeChecklist || null,
 
       // Engine coverage
       engineCoverage: result.engineCoverage || {},
