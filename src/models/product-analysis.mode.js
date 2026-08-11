@@ -227,6 +227,10 @@ const productAnalysisSchema = new mongoose.Schema(
       perplexity: { type: Number, default: 0 },
       gemini: { type: Number, default: 0 },
       aiOverview: { type: Number, default: 0 },
+      // Growth+ only (see getEnabledEngines in config/plans.js) — null,
+      // not 0, when the store's plan doesn't include Claude coverage, so
+      // the UI can tell "not scored" apart from "scored zero".
+      claude: { type: Number, default: null },
     },
 
     // ── Meta ──────────────────────────────────────────────────────────

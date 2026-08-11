@@ -63,6 +63,7 @@ const PLAN_CONFIG = {
       "competitorGap",
       "monthlyReportExport",
       "weeklyScan",
+      "claudeCoverage",
     ],
   },
   pro: {
@@ -100,6 +101,7 @@ const PLAN_CONFIG = {
       "apiAccess",
       "multiStore",
       "weeklyScan",
+      "claudeCoverage",
     ],
   },
 }
@@ -149,6 +151,19 @@ function planHasFeature(plan, feature, storeAddons = {}) {
     return true
 
   return false
+}
+
+/**
+ * Which AI engines a store's plan is scored/analysed against.
+ * chatgpt / perplexity / gemini / aiOverview are available on every plan.
+ * claude is Growth+ only (gated via the "claudeCoverage" feature).
+ */
+function getEnabledEngines(plan, storeAddons = {}) {
+  const engines = ["chatgpt", "perplexity", "gemini", "aiOverview"]
+  if (planHasFeature(plan, "claudeCoverage", storeAddons)) {
+    engines.push("claude")
+  }
+  return engines
 }
 
 function getTokenQuotaForPlan(plan) {
@@ -223,6 +238,7 @@ export {
   normalizePlan,
   getPlanConfig,
   planHasFeature,
+  getEnabledEngines,
   getTokenQuotaForPlan,
   getPromptLimits,
   getAllPlans,

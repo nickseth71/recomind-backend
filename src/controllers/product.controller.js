@@ -2956,7 +2956,11 @@ import {
 } from "../jobs/analysisqueue.js"
 import * as productSyncService from "../services/productsync.service.js"
 import * as promptWinService from "../services/promptwin.service.js"
-import { getPlanConfig, getPromptLimits } from "../config/plans.js"
+import {
+  getPlanConfig,
+  getPromptLimits,
+  planHasFeature,
+} from "../config/plans.js"
 import { countActiveSyncedProducts } from "../middleware/plan-limits.js"
 import * as shopifyService from "../services/shopify.service.js"
 import * as impactService from "../services/impact.service.js"
@@ -3776,6 +3780,7 @@ async function getDashboardStats(req, res, next) {
             perplexity: { $avg: "$engineCoverage.perplexity" },
             gemini: { $avg: "$engineCoverage.gemini" },
             aiOverview: { $avg: "$engineCoverage.aiOverview" },
+            claude: { $avg: "$engineCoverage.claude" },
             analysedProducts: { $sum: 1 },
           },
         },
@@ -3827,6 +3832,7 @@ async function getDashboardStats(req, res, next) {
       perplexity: 0,
       gemini: 0,
       aiOverview: 0,
+      claude: null,
       analysedProducts: 0,
     }
 
@@ -3963,6 +3969,16 @@ async function getDashboardStats(req, res, next) {
         perplexity: Math.round(coverage.perplexity || 0),
         gemini: Math.round(coverage.gemini || 0),
         aiOverview: Math.round(coverage.aiOverview || 0),
+        ...(planHasFeature(
+          req.store.plan,
+          "claudeCoverage",
+          req.store.addons || {},
+        )
+          ? {
+              claude:
+                coverage.claude != null ? Math.round(coverage.claude) : null,
+            }
+          : {}),
         analysedProducts: coverage.analysedProducts || 0,
         period: timePeriod,
       },
