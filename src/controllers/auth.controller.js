@@ -617,6 +617,60 @@ async function getMe(req, res) {
   })
 }
 
+/**
+ * POST /api/stores/sync-token
+ * Lightweight token sync — used when the FRONTEND's own Shopify session
+ * (managed independently by Shopify's library, since
+ * expiringOfflineAccessTokens is enabled there) refreshes on its own.
+ * That refresh has zero visibility into this backend's Redis-locked
+ * refresh system, so without this endpoint the two can silently rotate
+ * the same single-use Shopify refresh token out from under each other.
+ * This does ONLY a token-field update — no shop-info re-fetch, no webhook
+ * re-registration — specifically so it's cheap enough to call from a
+ * frontend loader without hurting page-load performance.
+ */
+async function syncStoreToken(req, res, next) {
+  try {
+    let { shop, accessToken, refreshToken, expiresAt, refreshTokenExpiresAt } =
+      req.body
+
+    if (!shop || !accessToken) {
+      return res.status(400).json({
+        success: false,
+        error: "shop and accessToken are required",
+      })
+    }
+    shop = shop.toLowerCase().trim()
+
+    const store = await Store.findOne({ shopDomain: shop, isActive: true })
+    if (!store) {
+      return res.status(404).json({
+        success: false,
+        error: "Store not found. Please reinstall the app.",
+      })
+    }
+
+    // No-op if this is the same access token we already have — avoids an
+    // unnecessary write when the frontend calls this defensively.
+    if (store.getAccessToken() === accessToken) {
+      return res.json({ success: true, updated: false })
+    }
+
+    store.setAccessToken(accessToken)
+    if (refreshToken) store.setRefreshToken(refreshToken)
+    if (expiresAt) store.accessTokenExpiresAt = new Date(expiresAt)
+    if (refreshTokenExpiresAt)
+      store.refreshTokenExpiresAt = new Date(refreshTokenExpiresAt)
+
+    await store.save()
+
+    logger.info(`↻ Token synced from frontend session for ${shop}`)
+    res.json({ success: true, updated: true })
+  } catch (err) {
+    next(err)
+  }
+}
+
 async function getStoreToken(req, res) {
   try {
     let shop = req.shop
@@ -831,6 +885,7 @@ export {
   registerStore,
   getMe,
   getStoreToken,
+  syncStoreToken,
   updateStoreSettings,
   listPlans,
   getStoreBillingInfo,

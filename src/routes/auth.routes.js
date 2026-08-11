@@ -4,6 +4,7 @@ import {
   getMe,
   registerStore,
   getStoreToken,
+  syncStoreToken,
   updateStoreSettings,
   listPlans,
   getStoreBillingInfo,
@@ -11,6 +12,7 @@ import {
 import { authenticate, validateShop } from "../middleware/auth.js"
 
 router.post("/", registerStore)
+router.post("/sync-token", syncStoreToken)
 router.get("/plans", listPlans)
 router.get("/me", authenticate, getMe)
 router.get("/billing", authenticate, getStoreBillingInfo)
