@@ -1442,6 +1442,17 @@ async function simulatePromptForProduct(
 
 Ground your evaluation in how AI shopping engines actually decide what to surface: structured, feed-like completeness (clear identifiers, price/availability, category-correct attributes), visible trust/logistics signals (reviews, return policy, shipping clarity), and — separately — whether the product's content states exact, specific facts rather than vague marketing language. A product can sound appealing and still lose because it lacks the structured, factual signals these engines actually key off.
 
+Judge "category-correct attributes" using this reference — only the attributes relevant to THIS product's actual category count toward missingSignals/expectedAttributes, never attributes from an unrelated category:
+- Food & Beverage: ingredients, allergens, nutrition facts, flavor, weight/volume, dietary claims
+- Beauty: ingredients, skin/hair type suitability, benefits, usage, certifications
+- Grooming: ingredients, use case, skin/hair type, benefits, size, fragrance
+- Healthcare/Wellness: active ingredients, dosage/usage, benefits, warnings, suitability
+- Clothing/Apparel: material, fit, size range, color, care instructions
+- Footwear: size, material, fit, cushioning, use case, terrain
+- Jewellery: material, gemstone, dimensions, occasion, care, certification
+- Electronics: specifications, compatibility, dimensions, warranty, use cases
+- Other categories: use judgment based on what a real buyer of this specific product would need to know
+
 Respond ONLY with valid JSON.`
 
   const interpretation = existingAnalysis?.interpretation || {}

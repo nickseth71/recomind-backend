@@ -509,6 +509,27 @@ async function getSimulationHistory(req, res, next) {
   }
 }
 
+async function getSimulationDetail(req, res, next) {
+  try {
+    const simulation = await PromptSimulation.findOne({
+      _id: req.params.id,
+      storeId: req.store._id,
+    })
+      .populate("productId", "title images")
+      .lean()
+
+    if (!simulation) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Simulation not found" })
+    }
+
+    res.json({ success: true, data: simulation })
+  } catch (err) {
+    next(err)
+  }
+}
+
 export {
   getWinDashboard,
   getProductPrompts,
@@ -519,5 +540,6 @@ export {
   simulatePrompt,
   analysePromptIntelligence,
   getSimulationHistory,
+  getSimulationDetail,
   getWinDashboardPrompts,
 }

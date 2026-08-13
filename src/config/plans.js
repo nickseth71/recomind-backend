@@ -64,6 +64,7 @@ const PLAN_CONFIG = {
       "monthlyReportExport",
       "weeklyScan",
       "claudeCoverage",
+      "manageSyncedProducts",
     ],
   },
   pro: {
@@ -102,6 +103,7 @@ const PLAN_CONFIG = {
       "multiStore",
       "weeklyScan",
       "claudeCoverage",
+      "manageSyncedProducts",
     ],
   },
 }

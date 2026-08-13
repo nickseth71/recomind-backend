@@ -44,5 +44,10 @@ router.get(
   ctrl.getPromptDetails,
 )
 router.get("/:promptId/fix", requireFeature("fixForPrompt"), ctrl.getPromptFix)
+router.get(
+  "/simulations/:id",
+  requireFeature("simulate"),
+  ctrl.getSimulationDetail,
+)
 
 export default router

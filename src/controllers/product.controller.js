@@ -3565,6 +3565,22 @@ async function syncSelected(req, res, next) {
  */
 async function removeFromSync(req, res, next) {
   try {
+    if (
+      !planHasFeature(
+        req.store.plan,
+        "manageSyncedProducts",
+        req.store.addons || {},
+      )
+    ) {
+      return res.status(403).json({
+        success: false,
+        error:
+          "Removing or swapping synced products requires the Growth plan or higher.",
+        requiredFeature: "manageSyncedProducts",
+        currentPlan: req.store.plan,
+      })
+    }
+
     const product = await productSyncService.removeProductFromSync(
       req.store._id,
       req.params.id,
