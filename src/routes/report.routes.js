@@ -12,5 +12,10 @@ router.get(
   ctrl.generateLlmsTxt,
 )
 router.get("/audit-log", ctrl.getAuditLog)
+router.get(
+  "/competitor-gap",
+  requireFeature("competitorGap"),
+  ctrl.generateCompetitorGapReport,
+)
 
 export default router

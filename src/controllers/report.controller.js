@@ -4,6 +4,7 @@ import PromptSimulation from "../models/promptsimulation.model.js"
 import AuditLog from "../models/auditlog.model.js"
 import * as aiService from "../services/ai.service.js"
 import logger from "../config/logger.js"
+import ExcelJS from "exceljs"
 
 /**
  * GET /api/reports/summary
@@ -172,6 +173,166 @@ async function generateLlmsTxt(req, res, next) {
 }
 
 /**
+ * GET /api/reports/competitor-gap
+ * Competitor Gap Report (.xlsx) — Growth+ only (gated by "competitorGap"
+ * feature). Two sheets: a scannable Overview (one row per product, gap
+ * vs best competitor) and a Detail sheet (every competitor row, every
+ * product, with the merchant's own row marked so it's easy to compare).
+ */
+async function generateCompetitorGapReport(req, res, next) {
+  try {
+    const analyses = await ProductAnalysis.find({
+      storeId: req.store._id,
+      "competitorBenchmark.competitors.0": { $exists: true },
+    })
+      .sort({ createdAt: -1 })
+      .populate("productId", "title")
+      .lean()
+
+    // Keep only the latest analysis per product (already sorted newest
+    // first, so the first one seen per product wins).
+    const latestByProduct = new Map()
+    for (const a of analyses) {
+      const pid = String(a.productId?._id || a.productId)
+      if (!latestByProduct.has(pid)) latestByProduct.set(pid, a)
+    }
+    const rows = [...latestByProduct.values()]
+
+    const workbook = new ExcelJS.Workbook()
+    workbook.creator = "RecoMind"
+    workbook.created = new Date()
+
+    // ── Overview sheet ────────────────────────────────────────────────
+    const overview = workbook.addWorksheet("Overview")
+    overview.columns = [
+      { header: "Product", key: "product", width: 38 },
+      { header: "Your AI Visibility Score", key: "myScore", width: 22 },
+      { header: "Top Competitor", key: "topCompetitor", width: 32 },
+      { header: "Top Competitor Score", key: "topScore", width: 20 },
+      { header: "Gap", key: "gap", width: 10 },
+      { header: "Competitors Tracked", key: "competitorCount", width: 20 },
+      { header: "Category Dimensions Compared", key: "dimensions", width: 40 },
+    ]
+    overview.getRow(1).font = { bold: true }
+    overview.getRow(1).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF111844" },
+    }
+    overview.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } }
+
+    for (const a of rows) {
+      const bench = a.competitorBenchmark || {}
+      const competitors = bench.competitors || []
+      const mine = competitors.find((c) => c.isMerchantProduct)
+      const others = competitors.filter((c) => !c.isMerchantProduct)
+      const topCompetitor = others.reduce(
+        (best, c) =>
+          (c.aiVisibilityScore || 0) > (best?.aiVisibilityScore || 0)
+            ? c
+            : best,
+        null,
+      )
+      const myScore = mine?.aiVisibilityScore ?? a.score ?? null
+      const topScore = topCompetitor?.aiVisibilityScore ?? null
+      const gap =
+        myScore != null && topScore != null ? topScore - myScore : null
+
+      const row = overview.addRow({
+        product: a.productId?.title || "Unknown product",
+        myScore,
+        topCompetitor: topCompetitor?.productName || "—",
+        topScore,
+        gap,
+        competitorCount: others.length,
+        dimensions: (bench.categoryDimensions || []).join(", "),
+      })
+
+      // Highlight a real gap (competitor ahead) in red, a lead in green
+      if (gap != null) {
+        const cell = row.getCell("gap")
+        if (gap > 0) {
+          cell.font = { color: { argb: "FFBA1A1A" }, bold: true }
+        } else if (gap < 0) {
+          cell.font = { color: { argb: "FF00875A" }, bold: true }
+        }
+      }
+    }
+
+    // ── Detail sheet ──────────────────────────────────────────────────
+    const detail = workbook.addWorksheet("Detail")
+    detail.columns = [
+      { header: "Product", key: "product", width: 32 },
+      { header: "Competitor / Your Product", key: "competitor", width: 32 },
+      { header: "Is Your Product?", key: "isMine", width: 16 },
+      { header: "AI Visibility Score", key: "score", width: 18 },
+      { header: "Has FAQ Section", key: "hasFaq", width: 16 },
+      { header: "Has Customer Reviews", key: "hasReviews", width: 20 },
+      { header: "Key Attributes", key: "attributes", width: 50 },
+    ]
+    detail.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } }
+    detail.getRow(1).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF111844" },
+    }
+
+    for (const a of rows) {
+      const bench = a.competitorBenchmark || {}
+      const productTitle = a.productId?.title || "Unknown product"
+      for (const c of bench.competitors || []) {
+        const attrs = c.attributes
+          ? Object.entries(c.attributes)
+              .map(([k, v]) => `${k}: ${v}`)
+              .join(" | ")
+          : ""
+        const row = detail.addRow({
+          product: productTitle,
+          competitor: c.productName || "—",
+          isMine: c.isMerchantProduct ? "Yes" : "No",
+          score: c.aiVisibilityScore ?? "",
+          hasFaq: c.faqSection ? "Yes" : "No",
+          hasReviews: c.customerReviews ? "Yes" : "No",
+          attributes: attrs,
+        })
+        if (c.isMerchantProduct) {
+          row.eachCell((cell) => {
+            cell.fill = {
+              type: "pattern",
+              pattern: "solid",
+              fgColor: { argb: "FFE8F5EE" },
+            }
+          })
+        }
+      }
+    }
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="competitor-gap-report-${new Date().toISOString().slice(0, 10)}.xlsx"`,
+    )
+
+    await AuditLog.create({
+      storeId: req.store._id,
+      action: "REPORT_EXPORTED",
+      entityType: "store",
+      entityId: req.store._id,
+      metadata: { type: "competitor-gap-xlsx", productCount: rows.length },
+      performedBy: "user",
+    })
+
+    await workbook.xlsx.write(res)
+    res.end()
+  } catch (err) {
+    next(err)
+  }
+}
+
+/**
  * GET /api/reports/audit-log
  * Get audit log entries for the store.
  */
@@ -200,4 +361,4 @@ async function getAuditLog(req, res, next) {
   }
 }
 
-export { getSummary, generateLlmsTxt, getAuditLog }
+export { getSummary, generateLlmsTxt, getAuditLog, generateCompetitorGapReport }
