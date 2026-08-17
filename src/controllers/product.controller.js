@@ -3326,7 +3326,7 @@ async function getCompetitorBenchmark(req, res, next) {
 async function optimiseProduct(req, res, next) {
   try {
     const store = await Store.findById(req.store._id)
-    console.log("accessToken from updateProduct:", store.accessToken)
+   // console.log("accessToken from updateProduct:", store.accessToken)
     const product = await Product.findOne({
       _id: req.params.id,
       storeId: req.store._id,

@@ -527,6 +527,119 @@ async function removeProductFromSync(storeId, productId) {
  *  - metafield: write to recomind.faqs metafield
  *  - skip: don't touch FAQs
  */
+// async function applyOptimisationToShopify(
+//   storeId,
+//   shopifyProductId,
+//   analysis,
+//   options = {},
+// ) {
+//   const store = await Store.findById(storeId)
+//   if (!store) throw new Error("Store not found")
+
+//   //console.log("accessToken from updateProduct:", store.accessToken)
+
+//   const product = await Product.findOne({
+//     storeId,
+//     shopifyProductId: String(shopifyProductId),
+//   })
+//   const faqStrategy = resolveFaqStrategy(
+//     product || {},
+//     store,
+//     options.faqStrategy,
+//   )
+
+//   const faqsToApply = options.faqs?.length
+//     ? options.faqs
+//     : mergeFaqs(
+//         analysis.existingFaqs || product?.existingFaqs || [],
+//         analysis.faq || [],
+//       )
+
+//   let includeFaqInDescription = false
+//   const updatePayload = {
+//     title: analysis.optimizedTitle,
+//     tags: [
+//       ...(analysis.intentKeywords || []).slice(0, 10),
+//       ...(analysis.bestFor || []).slice(0, 5),
+//     ].join(", "),
+//   }
+
+//   if (faqStrategy === "inline") {
+//     includeFaqInDescription = true
+//     let baseDescription = analysis.optimizedDescription || ""
+
+//     // If product already has FAQ section, replace it cleanly
+//     if (product?.hasFaqSection && product.descriptionHtml) {
+//       baseDescription =
+//         removeFaqSectionFromHtml(product.descriptionHtml) ||
+//         analysis.optimizedDescription ||
+//         ""
+//       // Prefer optimized description content if available
+//       if (analysis.optimizedDescription) {
+//         baseDescription = removeFaqSectionFromHtml(
+//           analysis.optimizedDescription,
+//         )
+//       }
+//     }
+
+//     updatePayload.body_html = buildOptimizedDescription(
+//       { ...analysis, optimizedDescription: baseDescription, faq: faqsToApply },
+//       { includeFaqInDescription: true },
+//     )
+//   } else if (faqStrategy === "metafield") {
+//     // Description without FAQ block
+//     updatePayload.body_html = buildOptimizedDescription(analysis, {
+//       includeFaqInDescription: false,
+//     })
+
+//     try {
+//       await shopifyService.upsertProductFaqMetafield(
+//         store.shopDomain,
+//         store.accessToken,
+//         shopifyProductId,
+//         faqsToApply.map(({ question, answer }) => ({ question, answer })),
+//       )
+//       logger.info(`FAQ metafield updated for product ${shopifyProductId}`)
+//     } catch (err) {
+//       logger.warn(
+//         `Metafield FAQ write failed, falling back to inline: ${err.message}`,
+//       )
+//       updatePayload.body_html = buildOptimizedDescription(
+//         { ...analysis, faq: faqsToApply },
+//         { includeFaqInDescription: true },
+//       )
+//       includeFaqInDescription = true
+//     }
+//   } else {
+//     // skip FAQ changes — only update description content
+//     updatePayload.body_html = buildOptimizedDescription(analysis, {
+//       includeFaqInDescription: false,
+//     })
+//   }
+
+//   const updatedProduct = await shopifyService.updateProduct(
+//     store.shopDomain,
+//     store.accessToken,
+//     shopifyProductId,
+//     updatePayload,
+//   )
+
+//   await syncSingleProduct(storeId, shopifyProductId)
+
+//   return {
+//     product: updatedProduct,
+//     faqStrategy: includeFaqInDescription ? "inline" : faqStrategy,
+//     faqsApplied: faqsToApply.length,
+//   }
+// }
+
+/**
+ * Apply optimised content back to Shopify product.
+ * FAQ handling:
+ *  - inline: update/create FAQ section in description (not duplicated in optimizedDescription)
+ *  - metafield: write to recomind.faqs metafield
+ *  - skip: don't touch FAQs
+ */
 async function applyOptimisationToShopify(
   storeId,
   shopifyProductId,
@@ -535,101 +648,43 @@ async function applyOptimisationToShopify(
 ) {
   const store = await Store.findById(storeId)
   if (!store) throw new Error("Store not found")
-
-  //console.log("accessToken from updateProduct:", store.accessToken)
-
+ 
   const product = await Product.findOne({
     storeId,
     shopifyProductId: String(shopifyProductId),
   })
-  const faqStrategy = resolveFaqStrategy(
-    product || {},
-    store,
-    options.faqStrategy,
-  )
-
-  const faqsToApply = options.faqs?.length
-    ? options.faqs
-    : mergeFaqs(
-        analysis.existingFaqs || product?.existingFaqs || [],
-        analysis.faq || [],
-      )
-
-  let includeFaqInDescription = false
+ 
+  // FAQs are intentionally NEVER pushed to Shopify (not inlined into the
+  // description, not written to a metafield) — they stay visible on the
+  // RecoMind analysis/product-detail page only, which reads them straight
+  // from MongoDB and is unaffected by this. Title, description content
+  // (minus any FAQ block), and tags still apply exactly as before.
+  const faqStrategy = "skip"
+ 
   const updatePayload = {
     title: analysis.optimizedTitle,
     tags: [
       ...(analysis.intentKeywords || []).slice(0, 10),
       ...(analysis.bestFor || []).slice(0, 5),
     ].join(", "),
-  }
-
-  if (faqStrategy === "inline") {
-    includeFaqInDescription = true
-    let baseDescription = analysis.optimizedDescription || ""
-
-    // If product already has FAQ section, replace it cleanly
-    if (product?.hasFaqSection && product.descriptionHtml) {
-      baseDescription =
-        removeFaqSectionFromHtml(product.descriptionHtml) ||
-        analysis.optimizedDescription ||
-        ""
-      // Prefer optimized description content if available
-      if (analysis.optimizedDescription) {
-        baseDescription = removeFaqSectionFromHtml(
-          analysis.optimizedDescription,
-        )
-      }
-    }
-
-    updatePayload.body_html = buildOptimizedDescription(
-      { ...analysis, optimizedDescription: baseDescription, faq: faqsToApply },
-      { includeFaqInDescription: true },
-    )
-  } else if (faqStrategy === "metafield") {
-    // Description without FAQ block
-    updatePayload.body_html = buildOptimizedDescription(analysis, {
+    body_html: buildOptimizedDescription(analysis, {
       includeFaqInDescription: false,
-    })
-
-    try {
-      await shopifyService.upsertProductFaqMetafield(
-        store.shopDomain,
-        store.accessToken,
-        shopifyProductId,
-        faqsToApply.map(({ question, answer }) => ({ question, answer })),
-      )
-      logger.info(`FAQ metafield updated for product ${shopifyProductId}`)
-    } catch (err) {
-      logger.warn(
-        `Metafield FAQ write failed, falling back to inline: ${err.message}`,
-      )
-      updatePayload.body_html = buildOptimizedDescription(
-        { ...analysis, faq: faqsToApply },
-        { includeFaqInDescription: true },
-      )
-      includeFaqInDescription = true
-    }
-  } else {
-    // skip FAQ changes — only update description content
-    updatePayload.body_html = buildOptimizedDescription(analysis, {
-      includeFaqInDescription: false,
-    })
+    }),
   }
-
+ 
   const updatedProduct = await shopifyService.updateProduct(
     store.shopDomain,
     store.accessToken,
     shopifyProductId,
     updatePayload,
   )
-
+ 
   await syncSingleProduct(storeId, shopifyProductId)
-
+ 
   return {
     product: updatedProduct,
-    faqStrategy: includeFaqInDescription ? "inline" : faqStrategy,
-    faqsApplied: faqsToApply.length,
+    faqStrategy,
+    faqsApplied: 0,
   }
 }
 
