@@ -19,6 +19,7 @@ router.use(authenticate)
 router.get("/dashboard", ctrl.getDashboardStats)
 router.get("/", ctrl.listProducts)
 router.get("/shopify-search", ctrl.searchShopifyProducts)
+router.get("/shopify-collections", ctrl.searchShopifyCollections)
 router.post("/sync-selected", enforceProductSyncLimit(), ctrl.syncSelected)
 router.post("/sync", ctrl.syncProducts)
 router.post(

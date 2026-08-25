@@ -84,6 +84,7 @@ const productAnalysisSchema = new mongoose.Schema(
       },
       competitiveContext: {
         directCompetitors: [String],
+        directCompetitorUrls: [String],
         differentiators: [String],
         weaknesses: [String],
         marketPosition: String,
@@ -209,6 +210,7 @@ const productAnalysisSchema = new mongoose.Schema(
       competitors: [
         {
           productName: String,
+          productUrl: String,
           isMerchantProduct: { type: Boolean, default: false },
           attributes: mongoose.Schema.Types.Mixed,
           faqSection: String,
@@ -217,6 +219,7 @@ const productAnalysisSchema = new mongoose.Schema(
           _id: false,
         },
       ],
+      competitorUrls: [String],
       categoryDimensions: [String],
       generatedAt: Date,
     },

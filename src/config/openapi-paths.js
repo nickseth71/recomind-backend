@@ -248,6 +248,23 @@ const openapiPaths = {
     },
   },
 
+  "/products/shopify-collections": {
+    get: {
+      tags: ["Products"],
+      summary: "Search the merchant's Shopify collections",
+      security: bearer,
+      parameters: [
+        {
+          name: "query",
+          in: "query",
+          schema: { type: "string" },
+          description: "Search term matched against collection title",
+        },
+      ],
+      responses: ok("Shopify collections available for product sync"),
+    },
+  },
+
   "/products/sync-selected": {
     post: {
       tags: ["Products"],

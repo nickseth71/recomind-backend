@@ -3326,7 +3326,7 @@ async function getCompetitorBenchmark(req, res, next) {
 async function optimiseProduct(req, res, next) {
   try {
     const store = await Store.findById(req.store._id)
-   // console.log("accessToken from updateProduct:", store.accessToken)
+    // console.log("accessToken from updateProduct:", store.accessToken)
     const product = await Product.findOne({
       _id: req.params.id,
       storeId: req.store._id,
@@ -3378,6 +3378,13 @@ async function optimiseProduct(req, res, next) {
 
     // Mark product as optimised
     await Product.findByIdAndUpdate(product._id, { isOptimized: true })
+
+    // Shopify now contains the recommended changes. Re-run analysis against
+    // the refreshed product so the list score reflects the applied content.
+    const refreshedProduct = await Product.findById(product._id)
+    if (refreshedProduct) {
+      await enqueueAnalysis(refreshedProduct._id, req.store._id)
+    }
 
     await AuditLog.create({
       storeId: req.store._id,
@@ -3470,12 +3477,13 @@ async function searchShopifyProducts(req, res, next) {
   try {
     const query = (req.query.query || req.query.q || "").trim()
     const cursor = req.query.cursor || null
+    const collectionId = (req.query.collectionId || "").trim()
     const limit = req.query.limit || 20
 
     const result = await shopifyService.searchShopifyProducts(
       req.store.shopDomain,
       req.store.getAccessToken(),
-      { query, cursor, limit },
+      { query, collectionId, cursor, limit },
     )
 
     // Mark which of these are already synced (and whether removed), so the
@@ -3502,6 +3510,21 @@ async function searchShopifyProducts(req, res, next) {
       success: true,
       data: { products, pageInfo: result.pageInfo },
     })
+  } catch (err) {
+    next(err)
+  }
+}
+
+/** GET /api/products/shopify-collections */
+async function searchShopifyCollections(req, res, next) {
+  try {
+    const query = (req.query.query || req.query.q || "").trim()
+    const collections = await shopifyService.searchShopifyCollections(
+      req.store.shopDomain,
+      req.store.getAccessToken(),
+      query,
+    )
+    res.json({ success: true, data: { collections } })
   } catch (err) {
     next(err)
   }
@@ -4025,6 +4048,7 @@ export {
   rollbackProduct,
   syncProducts,
   searchShopifyProducts,
+  searchShopifyCollections,
   syncSelected,
   removeFromSync,
   checkJobStatus,

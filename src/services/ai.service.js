@@ -948,7 +948,7 @@ Respond ONLY with a valid JSON object. No markdown, no code fences.`
   const pricingContext = buildPricingContext(product)
   const competitorInstruction =
     competitorCount > 0
-      ? `"directCompetitors": ["Return EXACTLY ${competitorCount} competitor brand or product names that AI engines compare this against the current product. Use only brands that are relevant to the store's active market(s) and similar in scale, pricing, and market maturity to the merchant's store. Avoid giant marketplace leaders or much larger incumbents unless they are truly comparable. Prefer peer brands that are at the same level or only 1–2 levels above the merchant's store, and never include much smaller or much less established brands as primary competitors."]`
+      ? `"directCompetitors": ["Return EXACTLY ${competitorCount} competitor brand or product names that AI engines compare this against the current product. Use only brands that are relevant to the store's active market(s) and similar in scale, pricing, and market maturity to the merchant's store. Avoid giant marketplace leaders or much larger incumbents unless they are truly comparable. Prefer peer brands that are at the same level or only 1–2 levels above the merchant's store, and never include much smaller or much less established brands as primary competitors."], "directCompetitorUrls": ["For each competitor, return its official product or brand URL in the same order. Use null when you cannot determine a reliable official URL."]`
       : `"directCompetitors": []`
   const marketContext = buildStoreMarketContext(store)
 
@@ -1807,6 +1807,11 @@ function buildCompetitorBenchmark(
   )
     ? interpretation.competitiveContext.directCompetitors.filter(Boolean)
     : []
+  const directCompetitorUrls = Array.isArray(
+    interpretation?.competitiveContext?.directCompetitorUrls,
+  )
+    ? interpretation.competitiveContext.directCompetitorUrls.filter(Boolean)
+    : []
 
   const productText = `${product.title || ""} ${product.description || ""} ${(product.tags || []).join(" ")} ${product.productType || ""} ${product.vendor || ""}`
   const normalizedLabel =
@@ -1901,10 +1906,15 @@ function buildCompetitorBenchmark(
     columns: ["Feature / Signal", "You", ...competitorNames],
     competitors: features.map((feature) => ({
       productName: feature.label,
+      productUrl: null,
       attributes: {
         values: [feature.merchantValue, ...feature.competitorDefaults],
       },
     })),
+    competitorUrls: competitorNames.map(
+      (name, i) =>
+        directCompetitorUrls[i] || (/^https?:\/\//i.test(name) ? name : null),
+    ),
     categoryDimensions: features.map((feature) => feature.label),
     generatedAt: new Date(),
   }

@@ -238,7 +238,7 @@ async function generateCompetitorGapReport(req, res, next) {
 
     // ── Overview sheet ────────────────────────────────────────────────
     const overview = workbook.addWorksheet("Overview")
-    overview.mergeCells("A1:G1")
+    overview.mergeCells("A1:H1")
     overview.getCell("A1").value =
       'How to read this: "Gap" shows how many points your best-performing competitor is ahead of you on AI Visibility Score (negative means you\'re ahead of them instead).'
     overview.getCell("A1").font = {
@@ -253,6 +253,7 @@ async function generateCompetitorGapReport(req, res, next) {
       "Product",
       "Your AI Visibility Score",
       "Toughest Competitor",
+      "Competitor URL",
       "Their Score",
       "Gap",
       "Competitors Compared",
@@ -264,6 +265,7 @@ async function generateCompetitorGapReport(req, res, next) {
       { key: "product", width: 38 },
       { key: "myScore", width: 22 },
       { key: "topCompetitor", width: 30 },
+      { key: "topCompetitorUrl", width: 42 },
       { key: "topScore", width: 14 },
       { key: "gap", width: 10 },
       { key: "competitorCount", width: 20 },
@@ -278,11 +280,14 @@ async function generateCompetitorGapReport(req, res, next) {
       const myScore = Number(scoreValues[0]) || a.score || 0
       let topScore = null
       let topCompetitor = "—"
+      let topCompetitorUrl = null
+      const competitorUrls = bench.competitorUrls || []
       competitorNames.forEach((name, i) => {
         const val = Number(scoreValues[i + 1])
         if (!isNaN(val) && (topScore === null || val > topScore)) {
           topScore = val
           topCompetitor = name
+          topCompetitorUrl = competitorUrls[i] || null
         }
       })
       const gap = topScore != null ? topScore - myScore : null
@@ -291,6 +296,7 @@ async function generateCompetitorGapReport(req, res, next) {
         product: a.productId?.title || "Unknown product",
         myScore,
         topCompetitor,
+        topCompetitorUrl,
         topScore,
         gap,
         competitorCount: competitorNames.length,
@@ -298,6 +304,12 @@ async function generateCompetitorGapReport(req, res, next) {
           .filter((d) => d !== "AI Visibility Score")
           .join(", "),
       })
+
+      if (topCompetitorUrl) {
+        const cell = row.getCell("topCompetitorUrl")
+        cell.value = { text: topCompetitorUrl, hyperlink: topCompetitorUrl }
+        cell.font = { color: { argb: "FF0563C1" }, underline: true }
+      }
 
       if (gap != null) {
         const cell = row.getCell("gap")
@@ -347,6 +359,13 @@ async function generateCompetitorGapReport(req, res, next) {
         cell.font = HEADER_FONT
         cell.fill = i === 1 ? YOU_FILL : HEADER_FILL
         if (i === 1) cell.font = { bold: true, color: { argb: "FF00875A" } }
+      })
+      competitorNames.forEach((name, i) => {
+        const url = (bench.competitorUrls || [])[i]
+        if (!url) return
+        const cell = detail.getCell(headerRowNum, i + 3)
+        cell.value = { text: name, hyperlink: url }
+        cell.font = { bold: true, color: { argb: "FF0563C1" }, underline: true }
       })
       currentRow++
 

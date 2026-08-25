@@ -1591,7 +1591,7 @@ async function fetchProductSalesFromOrders(
 async function searchShopifyProducts(
   shop,
   accessToken,
-  { query = "", cursor = null, limit = 20 } = {},
+  { query = "", collectionId = "", cursor = null, limit = 20 } = {},
 ) {
   const gqlQuery = `
     query SearchProducts($first: Int!, $after: String, $query: String) {
@@ -1620,7 +1620,10 @@ async function searchShopifyProducts(
 
   // Shopify search syntax: bare terms match title/vendor/tag etc.
   // Wrap in wildcard so partial words match too (e.g. "ring" matches "Diamond Ring").
-  const searchQuery = query?.trim() ? `title:*${query.trim()}*` : null
+  const searchTerms = []
+  if (query?.trim()) searchTerms.push(`title:*${query.trim()}*`)
+  if (collectionId) searchTerms.push(`collection_id:${collectionId}`)
+  const searchQuery = searchTerms.length ? searchTerms.join(" ") : null
 
   const data = await graphqlQuery(shop, accessToken, gqlQuery, {
     first: Math.min(Math.max(parseInt(limit, 10) || 20, 1), 50),
@@ -1644,6 +1647,29 @@ async function searchShopifyProducts(
       endCursor: null,
     },
   }
+}
+
+/** Search the merchant's Shopify collections for the sync picker. */
+async function searchShopifyCollections(shop, accessToken, query = "") {
+  const gqlQuery = `
+    query SearchCollections($first: Int!, $query: String) {
+      collections(first: $first, query: $query, sortKey: TITLE) {
+        edges {
+          node { id title handle productsCount { count } }
+        }
+      }
+    }
+  `
+  const data = await graphqlQuery(shop, accessToken, gqlQuery, {
+    first: 50,
+    query: query?.trim() ? `title:*${query.trim()}*` : null,
+  })
+  return (data?.collections?.edges || []).map(({ node }) => ({
+    shopifyCollectionId: node.id.split("/").pop(),
+    title: node.title,
+    handle: node.handle,
+    productCount: node.productsCount?.count || 0,
+  }))
 }
 
 /**
@@ -1708,6 +1734,7 @@ export {
   fetchAllProducts,
   fetchProduct,
   searchShopifyProducts,
+  searchShopifyCollections,
   fetchProductsByIds,
   fetchProductCollections,
   fetchProductMetafields,
