@@ -270,6 +270,7 @@ import { TOKEN_COSTS } from "../../config/plans.js"
 import crypto from "crypto"
 import { getPromptLimits } from "../../config/plans.js"
 import startMetricsSync from "../metrics-sync.js"
+import { generateLlmFiles } from "../../services/llm-files.service.js"
 
 const QUEUE_NAME = "recomind-ai-jobs"
 const CONCURRENCY = parseInt(process.env.QUEUE_CONCURRENCY) || 3
@@ -458,6 +459,8 @@ async function processAnalysisJob(productId, storeId, job) {
       rawAiResponse: result.rawAiResponse,
       marketContext: result.marketContext || null,
     })
+
+    await generateLlmFiles(store, product, analysis)
 
     job.updateProgress(75)
 

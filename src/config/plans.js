@@ -2,8 +2,7 @@
  * RecoMind billing plans — aligned with pricing page.
  *
  * Starter  $29/mo  — lead generator, basic visibility
- * Growth   $99/mo  — main revenue tier
- * Pro      $299/mo — Shopify Plus / agencies (legacy alias: agency)
+ * Custom   contact us — negotiated pricing and features
  *
  * Add-ons:
  *   promptTracking      $19/mo
@@ -29,11 +28,43 @@ const PLAN_CONFIG = {
     features: [
       "analyze",
       "optimize",
-      "applyFixBasic",
       "promptWinDashboard",
+      "promptWinDashboardFull",
       "aiReadinessScore",
       "weeklyScan",
+      "fixForPrompt",
+      "promptIntelligence",
+      "simulate",
+      "competitorGap",
+      "competitorBenchmark",
+      "promptTracking",
+      "visibilityTrends",
+      "bulkOptimize",
+      "whiteLabel",
+      "monthlyReportExport",
+      "apiAccess",
+      "multiStore",
+      "claudeCoverage",
+      "manageSyncedProducts",
     ],
+    trialDays: 7,
+  },
+  custom: {
+    id: "custom",
+    label: "Custom",
+    priceMonthly: null,
+    tagline: "Contact us for custom pricing and features",
+    monthlyTokenQuota: 5000,
+    maxProductsAnalyzed: 25,
+    maxProductsReAnalyze: 1,
+    promptsPerProduct: 3,
+    manualPromptsPerProduct: 10,
+    competitorCount: 0,
+    totalTrackedPrompts: Infinity,
+    promptTracking: false,
+    scanFrequency: "weekly",
+    dashboardLevel: "basic",
+    features: [],
   },
   growth: {
     id: "growth",
@@ -135,7 +166,7 @@ const TOKEN_COSTS = {
 
 /** Map legacy plan ids to current config */
 function normalizePlan(plan) {
-  if (plan === "agency") return "pro"
+  if (["growth", "pro", "agency"].includes(plan)) return "starter"
   return plan || "starter"
 }
 
@@ -191,7 +222,7 @@ function getPromptLimits(plan, storeAddons = {}) {
 }
 
 function getAllPlans() {
-  return Object.values(PLAN_CONFIG).map((p) => ({
+  return [PLAN_CONFIG.starter, PLAN_CONFIG.custom].map((p) => ({
     ...p,
     features: p.features,
   }))

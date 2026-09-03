@@ -1593,6 +1593,49 @@ async function searchShopifyProducts(
   accessToken,
   { query = "", collectionId = "", cursor = null, limit = 20 } = {},
 ) {
+  if (collectionId) {
+    const collectionQuery = `
+      query CollectionProducts($id: ID!, $first: Int!, $after: String) {
+        collection(id: $id) {
+          products(first: $first, after: $after, sortKey: TITLE) {
+            edges {
+              node {
+                id
+                title
+                handle
+                status
+                featuredImage { url altText }
+                totalVariants
+              }
+            }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    `
+    const data = await graphqlQuery(shop, accessToken, collectionQuery, {
+      id: `gid://shopify/Collection/${collectionId}`,
+      first: Math.min(Math.max(parseInt(limit, 10) || 20, 1), 50),
+      after: cursor || null,
+    })
+    const connection = data?.collection?.products
+    return {
+      products: (connection?.edges || []).map(({ node }) => ({
+        shopifyProductId: node.id.split("/").pop(),
+        gid: node.id,
+        title: node.title,
+        handle: node.handle,
+        status: node.status,
+        image: node.featuredImage?.url || null,
+        variantCount: node.totalVariants,
+      })),
+      pageInfo: connection?.pageInfo || {
+        hasNextPage: false,
+        endCursor: null,
+      },
+    }
+  }
+
   const gqlQuery = `
     query SearchProducts($first: Int!, $after: String, $query: String) {
       products(first: $first, after: $after, query: $query, sortKey: TITLE) {
@@ -1622,7 +1665,6 @@ async function searchShopifyProducts(
   // Wrap in wildcard so partial words match too (e.g. "ring" matches "Diamond Ring").
   const searchTerms = []
   if (query?.trim()) searchTerms.push(`title:*${query.trim()}*`)
-  if (collectionId) searchTerms.push(`collection_id:${collectionId}`)
   const searchQuery = searchTerms.length ? searchTerms.join(" ") : null
 
   const data = await graphqlQuery(shop, accessToken, gqlQuery, {
@@ -1726,6 +1768,48 @@ async function registerWebhook(shop, accessToken, topic) {
   }
 }
 
+async function publishThemeLlmFiles(shop, accessToken, files) {
+  const themes = await graphqlQuery(
+    shop,
+    accessToken,
+    `query MainTheme { themes(first: 10, roles: MAIN) { nodes { id } } }`,
+  )
+  const themeId = themes?.themes?.nodes?.[0]?.id
+  if (!themeId) throw new Error("No main Shopify theme found")
+
+  const result = await graphqlQuery(
+    shop,
+    accessToken,
+    `mutation PublishLlmFiles($themeId: ID!, $files: [OnlineStoreThemeFileInput!]!) {
+      themeFilesUpsert(themeId: $themeId, files: $files) {
+        job { id }
+        userErrors { field message }
+      }
+    }`,
+    {
+      themeId,
+      files: [
+        {
+          filename: "templates/agents.md.liquid",
+          body: { type: "TEXT", value: files.agents },
+        },
+        {
+          filename: "templates/llms.txt.liquid",
+          body: { type: "TEXT", value: files.llms },
+        },
+        {
+          filename: "templates/llms-full.txt.liquid",
+          body: { type: "TEXT", value: files.llmsFull },
+        },
+      ],
+    },
+  )
+  const errors = result?.themeFilesUpsert?.userErrors || []
+  if (errors.length)
+    throw new Error(errors.map((error) => error.message).join(", "))
+  return { themeId, jobId: result?.themeFilesUpsert?.job?.id || null }
+}
+
 export {
   buildAuthUrl,
   exchangeCodeForToken,
@@ -1753,5 +1837,6 @@ export {
   fetchProductSessionMetrics,
   fetchProductSalesFromOrders,
   fetchMarkets,
+  publishThemeLlmFiles,
   RECOMIND_METAFIELD_NAMESPACE,
 }

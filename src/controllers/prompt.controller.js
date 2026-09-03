@@ -8,6 +8,8 @@ import * as aiService from "../services/ai.service.js"
 import * as promptWinService from "../services/promptwin.service.js"
 import { TOKEN_COSTS } from "../config/plans.js"
 import logger from "../config/logger.js"
+import crypto from "crypto"
+import TokenReservation from "../models/token-reservation.model.js"
 
 /**
  * GET /api/prompts/win-dashboard
@@ -430,6 +432,159 @@ async function simulatePrompt(req, res, next) {
   }
 }
 
+function parsePromptCsv(csv) {
+  return String(csv || "")
+    .split(/\r?\n/)
+    .map((row) => row.trim())
+    .filter(Boolean)
+    .map((row) =>
+      row
+        .replace(/^\s*prompt\s*,?/i, "")
+        .trim()
+        .replace(/^"|"$/g, ""),
+    )
+    .filter(Boolean)
+}
+
+async function simulateCsv(req, res, next) {
+  try {
+    const { csv, productId } = req.body
+    if (!csv || !productId)
+      return res
+        .status(400)
+        .json({ success: false, error: "csv and productId are required" })
+    const product = await Product.findOne({
+      _id: productId,
+      storeId: req.store._id,
+    })
+    if (!product)
+      return res
+        .status(404)
+        .json({ success: false, error: "Product not found" })
+    const prompts = parsePromptCsv(csv)
+    const batchId = crypto
+      .createHash("sha256")
+      .update(`${productId}:${csv}`)
+      .digest("hex")
+    const analysis = await ProductAnalysis.findOne(
+      { productId: product._id },
+      null,
+      { sort: { createdAt: -1 } },
+    ).lean()
+    const successful = []
+    const skipped = []
+    const remaining = []
+    for (let index = 0; index < prompts.length; index += 1) {
+      const prompt = prompts[index]
+      const fingerprint = crypto
+        .createHash("sha256")
+        .update(prompt.trim().toLowerCase())
+        .digest("hex")
+      const rowNumber = index + 1
+      const prior = await PromptSimulation.findOne({
+        storeId: req.store._id,
+        productId,
+        promptFingerprint: fingerprint,
+      }).lean()
+      if (prior) {
+        skipped.push(rowNumber)
+        continue
+      }
+      const reservationKey = `${batchId}:${fingerprint}`
+      const reservation = await TokenReservation.findOneAndUpdate(
+        { storeId: req.store._id, key: reservationKey },
+        {
+          $setOnInsert: {
+            amount: TOKEN_COSTS.promptSimulation,
+            status: "reserved",
+          },
+        },
+        { upsert: true, new: true },
+      )
+      if (
+        reservation.status !== "reserved" ||
+        reservation.createdAt < new Date(Date.now() - 60 * 60 * 1000)
+      ) {
+        remaining.push(rowNumber)
+        continue
+      }
+      const claim = await TokenReservation.updateOne(
+        { _id: reservation._id, status: "reserved" },
+        { $set: { status: "processing" } },
+      )
+      if (claim.modifiedCount !== 1) {
+        skipped.push(rowNumber)
+        continue
+      }
+      try {
+        await req.store.deductTokens(TOKEN_COSTS.promptSimulation)
+        const result = await aiService.simulatePromptForProduct(
+          prompt,
+          product,
+          analysis,
+          req.store,
+        )
+        const simulation = await PromptSimulation.create({
+          productId: product._id,
+          storeId: req.store._id,
+          prompt,
+          sourceBatchId: batchId,
+          sourceRowNumber: rowNumber,
+          promptFingerprint: fingerprint,
+          recommendationScore: result.recommendationScore || 0,
+          likelihood: result.likelihood || "LOW",
+          buyerIntent: result.buyerIntent,
+          expectedAttributes: result.expectedAttributes || [],
+          missingSignals: result.missingSignals || [],
+          rankingFactors: result.rankingFactors || [],
+          competitorStrength: result.competitorStrength || "MODERATE",
+          competitorDominating: result.competitorDominating || [],
+          semanticGaps: result.semanticGaps || [],
+          recommendations: result.recommendations || [],
+          rawAiResponse: result.rawAiResponse,
+          marketContext: result.marketContext || null,
+        })
+        await TokenReservation.findByIdAndUpdate(reservation._id, {
+          status: "completed",
+          simulationId: simulation._id,
+        })
+        successful.push(rowNumber)
+      } catch (error) {
+        await req.store.refundTokens(TOKEN_COSTS.promptSimulation)
+        await TokenReservation.findByIdAndUpdate(reservation._id, {
+          status: "refunded",
+        })
+        if (error.statusCode === 429) {
+          remaining.push(rowNumber)
+          break
+        }
+        throw error
+      }
+    }
+    const simulatedSet = new Set([...successful, ...skipped])
+    for (let index = 1; index <= prompts.length; index += 1)
+      if (!simulatedSet.has(index) && !remaining.includes(index))
+        remaining.push(index)
+    res.json({
+      success: true,
+      data: {
+        batchId,
+        total: prompts.length,
+        simulatedPromptNumbers: [...successful, ...skipped].sort(
+          (a, b) => a - b,
+        ),
+        newlySimulatedPromptNumbers: successful,
+        skippedPromptNumbers: skipped,
+        unsimulatedPromptNumbers: remaining.sort((a, b) => a - b),
+        tokensRemaining: req.store.getRemainingTokens(),
+        needsMoreTokens: remaining.length > 0,
+      },
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
 /**
  * POST /api/prompts/analyse
  */
@@ -538,6 +693,7 @@ export {
   getPromptFix,
   getPromptDetails,
   simulatePrompt,
+  simulateCsv,
   analysePromptIntelligence,
   getSimulationHistory,
   getSimulationDetail,

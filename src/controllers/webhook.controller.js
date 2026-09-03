@@ -128,6 +128,28 @@ async function handleMarketsUpdate(req, res) {
   })
 }
 
+async function handleSubscriptionUpdate(req, res) {
+  res.sendStatus(200)
+  const subscription = req.webhookBody
+  const store = await Store.findOne({ shopDomain: req.shopDomain })
+  if (!store || subscription.status !== "ACTIVE") return
+  const match = String(subscription.name || "").match(
+    /([\d,]+) monthly tokens/i,
+  )
+  const amount = match ? Number(match[1].replace(/,/g, "")) : 0
+  if (
+    !amount ||
+    store.billingSubscriptionId !==
+      (subscription.admin_graphql_api_id || store.billingSubscriptionId)
+  )
+    return
+  const reference = `subscription:${subscription.admin_graphql_api_id}:${subscription.updated_at || subscription.created_at || "active"}`
+  if (store.lastTokenPurchaseReference === reference) return
+  await store.addPurchasedTokens(amount, reference)
+  store.billingStatus = "ACTIVE"
+  await store.save()
+}
+
 export {
   verifyShopifyWebhook,
   handleProductCreate,
@@ -135,4 +157,5 @@ export {
   handleProductDelete,
   handleAppUninstalled,
   handleMarketsUpdate,
+  handleSubscriptionUpdate,
 }

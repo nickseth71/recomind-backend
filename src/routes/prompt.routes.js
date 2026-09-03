@@ -26,6 +26,12 @@ router.post(
   ctrl.simulatePrompt,
 )
 router.post(
+  "/simulate/csv",
+  aiLimiter,
+  requireFeature("simulate"),
+  ctrl.simulateCsv,
+)
+router.post(
   "/analyse",
   aiLimiter,
   requireFeature("promptIntelligence"),

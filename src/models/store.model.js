@@ -41,13 +41,17 @@ const storeSchema = new mongoose.Schema(
     },
     plan: {
       type: String,
-      enum: ["starter", "growth", "pro", "agency"],
+      enum: ["starter", "custom", "growth", "pro", "agency"],
       default: "starter",
     },
     planExpiresAt: {
       type: Date,
       default: null,
     },
+    trialStartedAt: { type: Date, default: null },
+    trialEndsAt: { type: Date, default: null },
+    billingSubscriptionId: { type: String, default: null },
+    billingStatus: { type: String, default: "trialing" },
     addons: {
       promptTracking: { type: Boolean, default: false },
       aiVisibilityAudit: { type: Boolean, default: false },
@@ -56,6 +60,9 @@ const storeSchema = new mongoose.Schema(
     // Token usage tracking (resets monthly)
     monthlyTokenQuota: { type: Number, default: 0 }, // Max tokens per month for this plan
     tokensUsedThisMonth: { type: Number, default: 0 }, // Tokens used in current month
+    purchasedTokensThisMonth: { type: Number, default: 0 },
+    purchasedTokensAddedThisMonth: { type: Number, default: 0 },
+    lastTokenPurchaseReference: { type: String, default: null },
     tokenQuotaResetDate: { type: Date, default: Date.now }, // When the monthly quota resets
     lifetimeTokensUsed: { type: Number, default: 0 }, // Total tokens used (all time)
     shopName: {
@@ -193,6 +200,8 @@ storeSchema.methods.resetMonthlyQuotaIfNeeded = function () {
 
   if (daysSinceReset >= 30) {
     this.tokensUsedThisMonth = 0
+    this.purchasedTokensThisMonth = 0
+    this.purchasedTokensAddedThisMonth = 0
     this.tokenQuotaResetDate = now
     this.monthlyTokenQuota = this.getTokenQuotaForPlan()
     return true
@@ -203,14 +212,20 @@ storeSchema.methods.resetMonthlyQuotaIfNeeded = function () {
 // Check if store can use tokens
 storeSchema.methods.canUseTokens = function (tokensNeeded = 0) {
   this.resetMonthlyQuotaIfNeeded()
-  const remaining = this.monthlyTokenQuota - this.tokensUsedThisMonth
+  const remaining =
+    this.monthlyTokenQuota -
+    this.tokensUsedThisMonth +
+    (this.purchasedTokensThisMonth || 0)
   return remaining >= tokensNeeded
 }
 
 // Get remaining tokens for this month
 storeSchema.methods.getRemainingTokens = function () {
   this.resetMonthlyQuotaIfNeeded()
-  return Math.max(0, this.monthlyTokenQuota - this.tokensUsedThisMonth)
+  return (
+    Math.max(0, this.monthlyTokenQuota - this.tokensUsedThisMonth) +
+    Math.max(0, this.purchasedTokensThisMonth || 0)
+  )
 }
 
 // Increment plan usage counters
@@ -250,13 +265,56 @@ storeSchema.methods.deductTokens = async function (amount) {
     {
       _id: this._id,
       $expr: {
-        $lte: [
-          { $add: ["$tokensUsedThisMonth", amount] },
-          "$monthlyTokenQuota",
+        $gte: [
+          {
+            $add: [
+              { $subtract: ["$monthlyTokenQuota", "$tokensUsedThisMonth"] },
+              { $ifNull: ["$purchasedTokensThisMonth", 0] },
+            ],
+          },
+          amount,
         ],
       },
     },
-    { $inc: { tokensUsedThisMonth: amount, lifetimeTokensUsed: amount } },
+    [
+      {
+        $set: {
+          tokensUsedThisMonth: {
+            $add: [
+              "$tokensUsedThisMonth",
+              {
+                $min: [
+                  amount,
+                  { $subtract: ["$monthlyTokenQuota", "$tokensUsedThisMonth"] },
+                ],
+              },
+            ],
+          },
+          purchasedTokensThisMonth: {
+            $subtract: [
+              { $ifNull: ["$purchasedTokensThisMonth", 0] },
+              {
+                $max: [
+                  0,
+                  {
+                    $subtract: [
+                      amount,
+                      {
+                        $subtract: [
+                          "$monthlyTokenQuota",
+                          "$tokensUsedThisMonth",
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+          lifetimeTokensUsed: { $add: ["$lifetimeTokensUsed", amount] },
+        },
+      },
+    ],
     { new: true },
   )
 
@@ -274,16 +332,41 @@ storeSchema.methods.deductTokens = async function (amount) {
   // Keep this in-memory instance in sync for any code that reads
   // store.tokensUsedThisMonth right after calling deductTokens.
   this.tokensUsedThisMonth = updated.tokensUsedThisMonth
+  this.purchasedTokensThisMonth = updated.purchasedTokensThisMonth
   this.lifetimeTokensUsed = updated.lifetimeTokensUsed
 
   return {
     used: amount,
     remaining: Math.max(
       0,
-      updated.monthlyTokenQuota - updated.tokensUsedThisMonth,
+      updated.monthlyTokenQuota -
+        updated.tokensUsedThisMonth +
+        updated.purchasedTokensThisMonth,
     ),
     quota: updated.monthlyTokenQuota,
   }
+}
+
+storeSchema.methods.addPurchasedTokens = async function (amount, reference) {
+  if (!Number.isInteger(amount) || amount <= 0) {
+    throw new Error("Token amount must be a positive integer")
+  }
+  this.resetMonthlyQuotaIfNeeded()
+  if (this.isModified()) await this.save()
+  const updated = await this.constructor.findOneAndUpdate(
+    { _id: this._id },
+    {
+      $inc: {
+        purchasedTokensThisMonth: amount,
+        purchasedTokensAddedThisMonth: amount,
+      },
+      ...(reference ? { $set: { lastTokenPurchaseReference: reference } } : {}),
+    },
+    { new: true },
+  )
+  this.purchasedTokensThisMonth = updated.purchasedTokensThisMonth
+  this.purchasedTokensAddedThisMonth = updated.purchasedTokensAddedThisMonth
+  return updated
 }
 
 // Initialize quota on first save (pre-save hook)

@@ -469,6 +469,8 @@ async function registerStore(req, res, next) {
 
     if (!store) {
       store = new Store({ shopDomain: shop, plan: "starter" })
+      store.trialStartedAt = new Date()
+      store.trialEndsAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
     }
 
     store.setAccessToken(accessToken)
@@ -821,6 +823,8 @@ async function getStoreBillingInfo(req, res, next) {
         tokenQuota: {
           monthly: store.monthlyTokenQuota,
           used: store.tokensUsedThisMonth,
+          purchased: store.purchasedTokensThisMonth || 0,
+          purchasedAddedThisMonth: store.purchasedTokensAddedThisMonth || 0,
           remaining: store.getRemainingTokens(),
           percentUsed: Math.round(
             ((store.tokensUsedThisMonth || 0) /
@@ -881,6 +885,69 @@ async function getStoreBillingInfo(req, res, next) {
   }
 }
 
+async function purchaseTokens(req, res, next) {
+  try {
+    const amount = Number(req.body.amount)
+    if (
+      !Number.isInteger(amount) ||
+      amount < 1000 ||
+      amount > 100000 ||
+      amount % 1000
+    ) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          error: "Token amount must be 1,000 to 100,000 in 1,000-token steps",
+        })
+    }
+    const price = (amount / 1000) * 10
+    const data = await shopifyService.graphqlQuery(
+      req.store.shopDomain,
+      req.store.getAccessToken(),
+      `mutation CreateTokenSubscription($name: String!, $returnUrl: URL!, $lineItems: [AppSubscriptionLineItemInput!]!) {
+        appSubscriptionCreate(name: $name, returnUrl: $returnUrl, lineItems: $lineItems, trialDays: 0) {
+          confirmationUrl userErrors { field message } appSubscription { id status }
+        }
+      }`,
+      {
+        name: `RecoMind ${amount.toLocaleString()} monthly tokens`,
+        returnUrl:
+          process.env.SHOPIFY_APP_URL || "https://recomindai.onrender.com",
+        lineItems: [
+          {
+            plan: {
+              appRecurringPricingDetails: {
+                price: { amount: price.toFixed(2), currencyCode: "USD" },
+                interval: "EVERY_30_DAYS",
+              },
+            },
+          },
+        ],
+      },
+    )
+    const result = data?.appSubscriptionCreate
+    if (result?.userErrors?.length)
+      return res
+        .status(400)
+        .json({
+          success: false,
+          error: result.userErrors.map((e) => e.message).join(", "),
+        })
+    if (result?.appSubscription?.id) {
+      req.store.billingSubscriptionId = result.appSubscription.id
+      req.store.billingStatus = result.appSubscription.status
+      await req.store.save()
+    }
+    res.json({
+      success: true,
+      data: { amount, price, confirmationUrl: result?.confirmationUrl || null },
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
 export {
   registerStore,
   getMe,
@@ -889,4 +956,5 @@ export {
   updateStoreSettings,
   listPlans,
   getStoreBillingInfo,
+  purchaseTokens,
 }

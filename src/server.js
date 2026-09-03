@@ -18,6 +18,7 @@ import reportRoutes from "./routes/report.routes.js"
 import impactRoutes from "./routes/impact.routes.js"
 import webhookRoutes from "./routes/webhook.routes.js"
 import adminRoutes from "./routes/admin.routes.js"
+import llmFilesRoutes from "./routes/llm-files.routes.js"
 
 const app = express()
 app.set("trust proxy", 1)
@@ -53,6 +54,7 @@ app.use("/recomind/v1/prompts", promptRoutes)
 app.use("/recomind/v1/reports", reportRoutes)
 app.use("/recomind/v1/impact", impactRoutes)
 app.use("/recomind/v1/admin", adminRoutes)
+app.use("/recomind/v1/llm-files", llmFilesRoutes)
 
 app.get("/v1/health", (req, res) => {
   res.json({ status: "ok", service: "RecoMind API", version: "1.0.0" })

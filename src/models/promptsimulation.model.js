@@ -15,6 +15,9 @@ const promptSimulationSchema = new mongoose.Schema(
       index: true,
     },
     prompt: { type: String, required: true, trim: true },
+    sourceBatchId: { type: String, default: null, index: true },
+    sourceRowNumber: { type: Number, default: null },
+    promptFingerprint: { type: String, default: null, index: true },
 
     // Scoring
     recommendationScore: { type: Number, min: 0, max: 100, default: 0 },
@@ -43,6 +46,7 @@ const promptSimulationSchema = new mongoose.Schema(
 )
 
 promptSimulationSchema.index({ storeId: 1, createdAt: -1 })
+promptSimulationSchema.index({ storeId: 1, productId: 1, promptFingerprint: 1 })
 
 const PromptSimulation = mongoose.model(
   "PromptSimulation",
