@@ -16,15 +16,15 @@ const PLAN_CONFIG = {
     priceMonthly: 29,
     tagline: "See where your products stand in AI shopping",
     monthlyTokenQuota: 5000,
-    maxProductsAnalyzed: 25,
-    maxProductsReAnalyze: 1,
+    maxProductsAnalyzed: Infinity,
+    maxProductsReAnalyze: Infinity,
     promptsPerProduct: 3,
     manualPromptsPerProduct: 10,
-    competitorCount: 0,
+    competitorCount: 5,
     totalTrackedPrompts: Infinity,
-    promptTracking: false,
-    scanFrequency: "weekly",
-    dashboardLevel: "basic",
+    promptTracking: true,
+    scanFrequency: "daily",
+    dashboardLevel: "advanced",
     features: [
       "analyze",
       "optimize",
@@ -59,68 +59,19 @@ const PLAN_CONFIG = {
     maxProductsReAnalyze: 1,
     promptsPerProduct: 3,
     manualPromptsPerProduct: 10,
-    competitorCount: 0,
-    totalTrackedPrompts: Infinity,
-    promptTracking: false,
-    scanFrequency: "weekly",
-    dashboardLevel: "basic",
-    features: [],
-  },
-  growth: {
-    id: "growth",
-    label: "Growth",
-    priceMonthly: 99,
-    tagline: "Start winning high-intent AI searches",
-    monthlyTokenQuota: 50000,
-    maxProductsAnalyzed: 100,
-    maxProductsReAnalyze: 5,
-    promptsPerProduct: 6,
-    manualPromptsPerProduct: 20,
-    competitorCount: 3,
-    totalTrackedPrompts: Infinity,
-    promptTracking: false,
-    scanFrequency: "daily",
-    dashboardLevel: "full",
-    features: [
-      "analyze",
-      "optimize",
-      "applyFixBasic",
-      "fixForPrompt",
-      "promptWinDashboard",
-      "promptWinDashboardFull",
-      "aiReadinessScore",
-      "promptIntelligence",
-      "simulate",
-      "competitorGap",
-      "monthlyReportExport",
-      "weeklyScan",
-      "claudeCoverage",
-      "manageSyncedProducts",
-    ],
-  },
-  pro: {
-    id: "pro",
-    label: "Pro / Scale",
-    priceMonthly: 299,
-    tagline: "Own your category in AI recommendations",
-    monthlyTokenQuota: Infinity,
-    maxProductsAnalyzed: Infinity,
-    maxProductsReAnalyze: 10,
-    promptsPerProduct: 12,
-    manualPromptsPerProduct: 40,
     competitorCount: 5,
     totalTrackedPrompts: Infinity,
     promptTracking: true,
-    scanFrequency: "daily",
-    dashboardLevel: "advanced",
+    scanFrequency: "weekly",
+    dashboardLevel: "basic",
     features: [
       "analyze",
       "optimize",
-      "applyFixBasic",
-      "fixForPrompt",
       "promptWinDashboard",
       "promptWinDashboardFull",
       "aiReadinessScore",
+      "weeklyScan",
+      "fixForPrompt",
       "promptIntelligence",
       "simulate",
       "competitorGap",
@@ -132,7 +83,6 @@ const PLAN_CONFIG = {
       "monthlyReportExport",
       "apiAccess",
       "multiStore",
-      "weeklyScan",
       "claudeCoverage",
       "manageSyncedProducts",
     ],
@@ -176,7 +126,10 @@ function getPlanConfig(plan) {
 }
 
 function planHasFeature(plan, feature, storeAddons = {}) {
-  const config = getPlanConfig(plan)
+  const normalizedPlan = normalizePlan(plan)
+  if (normalizedPlan === "starter") return true
+
+  const config = getPlanConfig(normalizedPlan)
   if (config.features.includes(feature)) return true
 
   if (feature === "promptTracking" && storeAddons.promptTracking) return true
@@ -188,8 +141,6 @@ function planHasFeature(plan, feature, storeAddons = {}) {
 
 /**
  * Which AI engines a store's plan is scored/analysed against.
- * chatgpt / perplexity / gemini / aiOverview are available on every plan.
- * claude is Growth+ only (gated via the "claudeCoverage" feature).
  */
 function getEnabledEngines(plan, storeAddons = {}) {
   const engines = ["chatgpt", "perplexity", "gemini", "aiOverview"]

@@ -2964,6 +2964,7 @@ import {
 import { countActiveSyncedProducts } from "../middleware/plan-limits.js"
 import * as shopifyService from "../services/shopify.service.js"
 import * as impactService from "../services/impact.service.js"
+import * as aiService from "../services/ai.service.js"
 import { getRedis } from "../config/redis.js"
 import logger from "../config/logger.js"
 import crypto from "crypto"
@@ -3293,7 +3294,17 @@ async function getCompetitorBenchmark(req, res, next) {
     const planLimits = req.store.getPromptLimits()
     const competitorCount = planLimits.competitorCount || 0
     const enabled = competitorCount > 0
-    const hasBenchmark = Boolean(latestAnalysis?.competitorBenchmark)
+    const competitorBenchmark =
+      latestAnalysis?.competitorBenchmark ||
+      (latestAnalysis
+        ? aiService.buildCompetitorBenchmark(
+            competitorCount,
+            product,
+            latestAnalysis.interpretation,
+            latestAnalysis.score,
+          )
+        : null)
+    const hasBenchmark = Boolean(competitorBenchmark)
     const message = latestAnalysis
       ? hasBenchmark
         ? null
@@ -3305,9 +3316,7 @@ async function getCompetitorBenchmark(req, res, next) {
       data: {
         enabled,
         competitorCount,
-        competitorBenchmark: enabled
-          ? latestAnalysis?.competitorBenchmark || null
-          : null,
+        competitorBenchmark: enabled ? competitorBenchmark : null,
         plan: req.store.plan,
         hasAnalysis: Boolean(latestAnalysis),
         hasBenchmark,
