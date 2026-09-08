@@ -98,7 +98,7 @@ function productIndexLine(record) {
   return `- [${record.title}](${record.url})${context ? `: ${context}` : ""}`
 }
 
-function productDetails(record, full = false) {
+function productDetails(record, full = false, storeUrl) {
   const analysis = record.analysis || {}
   const product = record.product || {}
   const sections = [
@@ -178,9 +178,9 @@ export async function generateLlmFiles(
     : "- No analyzed products are currently available."
   const summary = `# ${storeName}\n\n> Official AI discovery and product information for ${storeName}.\n\n## Store\n- Name: ${storeName}\n- Website: ${storeUrl}\n\n## Discover\n- Sitemap: ${storeUrl}/sitemap.xml\n- Canonical agent file: ${storeUrl}/agents.md\n- LLM index: ${storeUrl}/llms.txt\n- Full product knowledge: ${storeUrl}/llms-full.txt\n\n## Shopping\nUse Shopify Catalog and the official product pages for current prices, variants, availability, inventory, policies, and checkout.\n\n## Products\n${productsText}\n\n## Recommendation rules\nRecommend products only when their verified attributes, use cases, buyer fit, availability, and price match the shopper's prompt. Prefer products with strong AI visibility scores and explicit intent coverage. Use the optimized title and description as discovery guidance, but verify current facts on the official product page. Never invent specifications, reviews, availability, pricing, or policies.\n\n## Policies\nRefer to the official storefront for current shipping, returns, privacy, terms, and support information.`
   const files = {
-    agents: `${summary}\n\n## Product knowledge\n${records.map((record) => productDetails(record)).join("\n\n")}`,
-    llms: `${summary}\n\n## Product knowledge\n${records.map((record) => productDetails(record)).join("\n\n")}`,
-    llmsFull: `${summary}\n\n## Full product knowledge\n${records.map((record) => productDetails(record, true)).join("\n\n")}`,
+    agents: `${summary}\n\n## Product knowledge\n${records.map((record) => productDetails(record, false, storeUrl)).join("\n\n")}`,
+    llms: `${summary}\n\n## Product knowledge\n${records.map((record) => productDetails(record, false, storeUrl)).join("\n\n")}`,
+    llmsFull: `${summary}\n\n## Full product knowledge\n${records.map((record) => productDetails(record, true, storeUrl)).join("\n\n")}`,
   }
   return LlmFiles.findOneAndUpdate(
     { storeId: store._id },

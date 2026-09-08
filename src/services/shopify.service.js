@@ -1780,7 +1780,7 @@ async function publishThemeLlmFiles(shop, accessToken, files) {
   const result = await graphqlQuery(
     shop,
     accessToken,
-    `mutation PublishLlmFiles($themeId: ID!, $files: [OnlineStoreThemeFileInput!]!) {
+    `mutation PublishLlmFiles($themeId: ID!, $files: [OnlineStoreThemeFilesUpsertFileInput!]!) {
       themeFilesUpsert(themeId: $themeId, files: $files) {
         job { id }
         userErrors { field message }
