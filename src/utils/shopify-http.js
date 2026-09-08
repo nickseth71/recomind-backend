@@ -275,7 +275,9 @@ async function refreshOnce(store) {
 }
 
 function isStillFresh(store) {
-  if (!store.accessTokenExpiresAt) return true // no expiry tracked — assume fine
+  // A 401 already proved the token is unusable. If expiry metadata is absent,
+  // force a refresh instead of retrying the same token.
+  if (!store.accessTokenExpiresAt) return false
   return new Date(store.accessTokenExpiresAt).getTime() > Date.now() + 60_000
 }
 

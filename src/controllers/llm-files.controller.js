@@ -38,6 +38,10 @@ export async function publishGeneratedLlmFiles(req, res, next) {
       data: { ...result, publishedAt: files.publishedAt },
     })
   } catch (error) {
+    if (error.statusCode === 401) {
+      error.message =
+        "Shopify connection expired. Reopen the app to refresh the connection, then publish again."
+    }
     next(error)
   }
 }
