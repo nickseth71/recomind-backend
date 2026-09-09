@@ -184,7 +184,14 @@ export async function generateLlmFiles(
   }
   return LlmFiles.findOneAndUpdate(
     { storeId: store._id },
-    { $set: { files, generatedAt: new Date() } },
+    {
+      $set: {
+        files,
+        generatedAt: new Date(),
+        publishedAt: null,
+        publishedThemeId: null,
+      },
+    },
     { upsert: true, new: true, setDefaultsOnInsert: true },
   )
 }

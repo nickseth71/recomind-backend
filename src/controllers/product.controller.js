@@ -3011,8 +3011,15 @@ async function listProducts(req, res, next) {
       filter.isRemovedFromSync = { $ne: true }
     }
     if (req.query.status) filter.status = req.query.status
-    if (req.query.optimized !== undefined)
-      filter.isOptimized = req.query.optimized === "true"
+    const analysisStatus = req.query.analysisStatus || "all"
+    if (analysisStatus === "analysed") filter.analysisScore = { $ne: null }
+    if (analysisStatus === "non-analysed") filter.analysisScore = null
+    if (!["all", "analysed", "non-analysed"].includes(analysisStatus)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid analysisStatus. Use all, analysed or non-analysed.",
+      })
+    }
     if (search) {
       filter.$or = [
         { title: { $regex: search, $options: "i" } },
@@ -3027,23 +3034,27 @@ async function listProducts(req, res, next) {
     else if (req.query.sort === "score_desc") sort.analysisScore = -1
     else sort.createdAt = -1
 
-    const [products, total, optimised, byScore] = await Promise.all([
-      Product.find(filter).sort(sort).skip(skip).limit(limit).lean(),
-      Product.countDocuments(filter),
-      Product.countDocuments({ storeId, isOptimized: true }),
-      Product.aggregate([
-        { $match: { storeId, analysisScore: { $ne: null } } },
-        {
-          $group: {
-            _id: null,
-            avgScore: { $avg: "$analysisScore" },
-            critical: {
-              $sum: { $cond: [{ $lt: ["$analysisScore", 40] }, 1, 0] },
+    const baseFilter = { storeId, isRemovedFromSync: { $ne: true } }
+    const [products, total, analysed, nonAnalysed, byScore] = await Promise.all(
+      [
+        Product.find(filter).sort(sort).skip(skip).limit(limit).lean(),
+        Product.countDocuments(filter),
+        Product.countDocuments({ ...baseFilter, analysisScore: { $ne: null } }),
+        Product.countDocuments({ ...baseFilter, analysisScore: null }),
+        Product.aggregate([
+          { $match: { ...baseFilter, analysisScore: { $ne: null } } },
+          {
+            $group: {
+              _id: null,
+              avgScore: { $avg: "$analysisScore" },
+              critical: {
+                $sum: { $cond: [{ $lt: ["$analysisScore", 40] }, 1, 0] },
+              },
             },
           },
-        },
-      ]),
-    ])
+        ]),
+      ],
+    )
 
     const scoreStats = byScore[0] || { avgScore: 0, critical: 0 }
 
@@ -3051,9 +3062,11 @@ async function listProducts(req, res, next) {
       success: true,
       data: products,
       avgScore: Math.round(scoreStats.avgScore || 0),
-      optimisedCount: optimised,
+      analysedCount: analysed,
+      nonAnalysedCount: nonAnalysed,
       criticalCount: scoreStats.critical,
-      unoptimisedCount: total - optimised,
+      optimisedCount: analysed,
+      unoptimisedCount: nonAnalysed,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     })
   } catch (err) {

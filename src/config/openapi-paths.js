@@ -199,10 +199,14 @@ const openapiPaths = {
           schema: { type: "string", enum: ["score_asc", "score_desc"] },
         },
         {
-          name: "optimized",
+          name: "analysisStatus",
           in: "query",
-          schema: { type: "boolean" },
-          description: "Filter by isOptimized",
+          schema: {
+            type: "string",
+            enum: ["all", "analysed", "non-analysed"],
+            default: "all",
+          },
+          description: "Filter by whether a product has an analysis",
         },
         {
           name: "status",
