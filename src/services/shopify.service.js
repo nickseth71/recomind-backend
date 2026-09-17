@@ -868,13 +868,19 @@ function verifyHmac(query) {
  * Verify webhook HMAC from Shopify.
  */
 function verifyWebhookHmac(rawBody, hmacHeader) {
+  const secret =
+    process.env.SHOPIFY_WEBHOOK_SECRET || process.env.SHOPIFY_API_SECRET
+  if (!secret || !hmacHeader) return false
+
   const expected = crypto
-    .createHmac("sha256", process.env.SHOPIFY_WEBHOOK_SECRET)
+    .createHmac("sha256", secret)
     .update(rawBody)
     .digest("base64")
-  return crypto.timingSafeEqual(
-    Buffer.from(expected, "base64"),
-    Buffer.from(hmacHeader, "base64"),
+  const expectedBuffer = Buffer.from(expected, "base64")
+  const receivedBuffer = Buffer.from(hmacHeader, "base64")
+  return (
+    expectedBuffer.length === receivedBuffer.length &&
+    crypto.timingSafeEqual(expectedBuffer, receivedBuffer)
   )
 }
 

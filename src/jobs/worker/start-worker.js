@@ -270,10 +270,7 @@ import { TOKEN_COSTS } from "../../config/plans.js"
 import crypto from "crypto"
 import { getPromptLimits } from "../../config/plans.js"
 import startMetricsSync from "../metrics-sync.js"
-import {
-  generateLlmFiles,
-  publishLlmFiles,
-} from "../../services/llm-files.service.js"
+import { generateLlmFiles } from "../../services/llm-files.service.js"
 import LlmFiles from "../../models/llm-files.model.js"
 
 const QUEUE_NAME = "recomind-ai-jobs"
@@ -479,20 +476,7 @@ async function processAnalysisJob(productId, storeId, job) {
         : undefined,
     })
 
-    const existingLlmFiles = await LlmFiles.findOne({ storeId }).select(
-      "publishedAt",
-    )
-    const llmFiles = await generateLlmFiles(store, product, analysis)
-    if (existingLlmFiles?.publishedAt) {
-      try {
-        await publishLlmFiles(store, llmFiles)
-        logger.info(`✓ Published updated LLM files for ${product.title}`)
-      } catch (err) {
-        logger.warn(
-          `LLM files regenerated but could not be republished for ${product.title}: ${err.message}`,
-        )
-      }
-    }
+    await generateLlmFiles(store, product, analysis)
 
     job.updateProgress(75)
 

@@ -694,33 +694,57 @@ async function getVisibilityScore(req, res, next) {
     const since = new Date()
     since.setDate(since.getDate() - days)
 
-    const [current, previous, analyzedProducts] = await Promise.all([
-      ProductAnalysis.aggregate([
-        { $match: { storeId: req.store._id, createdAt: { $gte: since } } },
-        {
-          $group: { _id: null, score: { $avg: "$score" }, scans: { $sum: 1 } },
-        },
-      ]),
-      ProductAnalysis.aggregate([
-        {
-          $match: {
-            storeId: req.store._id,
-            createdAt: {
-              $gte: new Date(since.getTime() - days * 86400000),
-              $lt: since,
+    const [current, catalogScore, previous, analyzedProducts] =
+      await Promise.all([
+        Product.aggregate([
+          {
+            $match: {
+              storeId: req.store._id,
+              analysisScore: { $ne: null },
+              lastAnalysedAt: { $gte: since },
             },
           },
-        },
-        { $group: { _id: null, score: { $avg: "$score" } } },
-      ]),
-      Product.countDocuments({
-        storeId: req.store._id,
-        analysisScore: { $ne: null },
-      }),
-    ])
+          {
+            $group: {
+              _id: null,
+              score: { $avg: "$analysisScore" },
+              scans: { $sum: 1 },
+            },
+          },
+        ]),
+        Product.aggregate([
+          {
+            $match: {
+              storeId: req.store._id,
+              analysisScore: { $ne: null },
+            },
+          },
+          { $group: { _id: null, score: { $avg: "$analysisScore" } } },
+        ]),
+        ProductAnalysis.aggregate([
+          {
+            $match: {
+              storeId: req.store._id,
+              createdAt: {
+                $gte: new Date(since.getTime() - days * 86400000),
+                $lt: since,
+              },
+            },
+          },
+          { $group: { _id: null, score: { $avg: "$score" } } },
+        ]),
+        Product.countDocuments({
+          storeId: req.store._id,
+          analysisScore: { $ne: null },
+        }),
+      ])
 
     const score =
-      current[0]?.score != null ? Math.round(current[0].score) : null
+      current[0]?.score != null
+        ? Math.round(current[0].score)
+        : catalogScore[0]?.score != null
+          ? Math.round(catalogScore[0].score)
+          : null
     const previousScore =
       previous[0]?.score != null ? Math.round(previous[0].score) : null
 
