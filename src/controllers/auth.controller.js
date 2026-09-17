@@ -514,9 +514,11 @@ async function registerStore(req, res, next) {
     const wasInactive = store?.isActive === false
 
     if (!store) {
-      store = new Store({ shopDomain: shop, plan: "starter" })
+      store = new Store({ shopDomain: shop })
       store.trialStartedAt = new Date()
       store.trialEndsAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+      store.monthlyTokenQuota = 1000
+      store.tokenQuotaResetDate = new Date()
     }
 
     store.setAccessToken(accessToken)
@@ -545,17 +547,7 @@ async function registerStore(req, res, next) {
     await store.save()
     logger.info(`Store ${isNew ? "created" : "updated"}: ${shop}`)
 
-    let billingConfirmationUrl = store.billingConfirmationUrl
-    if (isNew && !store.billingSubscriptionId) {
-      try {
-        const subscription = await createPlanSubscription(store, "starter", 7)
-        billingConfirmationUrl = subscription?.confirmationUrl || null
-      } catch (billingError) {
-        logger.warn(
-          `Could not create trial subscription for ${shop}: ${billingError.message}`,
-        )
-      }
-    }
+    const billingConfirmationUrl = store.billingConfirmationUrl
 
     // Register webhooks using the stored access token to avoid any
     // mismatch between the token we just saved and the one received in
@@ -648,6 +640,10 @@ async function getMe(req, res) {
       currency: store.currency,
       timezone: store.timezone,
       plan: store.plan,
+      isTrial: store.isTrialActive(),
+      trialStartedAt: store.trialStartedAt,
+      trialEndsAt: store.trialEndsAt,
+      billingStatus: store.billingStatus,
       planExpiresAt: store.planExpiresAt,
       planConfig: getPlanConfig(store.plan),
       addons: store.addons || {},
@@ -677,6 +673,76 @@ async function getMe(req, res) {
       },
     },
   })
+}
+
+/**
+ * GET /api/auth/visibility-score
+ * Returns the score for a selected analysis period for the sidebar.
+ */
+async function getVisibilityScore(req, res, next) {
+  try {
+    const periodMap = {
+      "30d": 30,
+      "3m": 90,
+      "6m": 180,
+      "30days": 30,
+      "3months": 90,
+      "6months": 180,
+    }
+    const period = req.query.period || "30d"
+    const days = periodMap[period] || 30
+    const since = new Date()
+    since.setDate(since.getDate() - days)
+
+    const [current, previous, analyzedProducts] = await Promise.all([
+      ProductAnalysis.aggregate([
+        { $match: { storeId: req.store._id, createdAt: { $gte: since } } },
+        {
+          $group: { _id: null, score: { $avg: "$score" }, scans: { $sum: 1 } },
+        },
+      ]),
+      ProductAnalysis.aggregate([
+        {
+          $match: {
+            storeId: req.store._id,
+            createdAt: {
+              $gte: new Date(since.getTime() - days * 86400000),
+              $lt: since,
+            },
+          },
+        },
+        { $group: { _id: null, score: { $avg: "$score" } } },
+      ]),
+      Product.countDocuments({
+        storeId: req.store._id,
+        analysisScore: { $ne: null },
+      }),
+    ])
+
+    const score =
+      current[0]?.score != null ? Math.round(current[0].score) : null
+    const previousScore =
+      previous[0]?.score != null ? Math.round(previous[0].score) : null
+
+    res.json({
+      success: true,
+      data: {
+        score,
+        previousScore,
+        change:
+          score != null && previousScore != null ? score - previousScore : null,
+        period,
+        days,
+        scans: current[0]?.scans || 0,
+        analyzedProducts,
+        plan: req.store.plan,
+        isTrial: req.store.isTrialActive(),
+        trialEndsAt: req.store.trialEndsAt,
+      },
+    })
+  } catch (err) {
+    next(err)
+  }
 }
 
 /**
@@ -872,7 +938,7 @@ async function getStoreBillingInfo(req, res, next) {
         // ─── Billing & Plan ──────────────────────────────────────────
         plan: {
           name: store.plan,
-          label: planConfig.label,
+          label: store.isTrialActive() ? "Trial" : planConfig.label,
           tagline: planConfig.tagline,
           expiresAt: nextBillingDate,
           daysUntilExpiry: daysUntilExpiry,
@@ -1031,6 +1097,7 @@ async function purchasePlan(req, res, next) {
 export {
   registerStore,
   getMe,
+  getVisibilityScore,
   getStoreToken,
   syncStoreToken,
   updateStoreSettings,

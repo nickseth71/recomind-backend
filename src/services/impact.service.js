@@ -167,7 +167,8 @@ function buildMetricCards({ before, after, intentsUnlocked }) {
     before.conversionRate,
     after.conversionRate,
   )
-  const revenueChange = pctChange(before.revenue, after.revenue)
+  const revenueChange =
+    after.orders === 0 ? 0 : pctChange(before.revenue, after.revenue)
 
   return [
     {
@@ -429,6 +430,7 @@ async function getProductImpact(store, { windowDays = 7, limit = 20 } = {}) {
     let afterSessions
     let beforeRevenue
     let afterRevenue
+    let afterOrderCount = 0
     let growth
     let intentCounts
 
@@ -503,7 +505,12 @@ async function getProductImpact(store, { windowDays = 7, limit = 20 } = {}) {
         afterSalesEntry?.revenue ??
         product.conversionMetrics?.postOptimization?.revenue ??
         0
-      growth = pctChange(beforeRevenue, afterRevenue)
+      const afterOrders =
+        afterSalesEntry?.orders ??
+        afterOrdersMap[product.shopifyProductId]?.orders ??
+        0
+      afterOrderCount = afterOrders
+      growth = afterOrders === 0 ? 0 : pctChange(beforeRevenue, afterRevenue)
     } catch (err) {
       if (!isShopifyAccessError(err)) throw err
       logger.warn(
@@ -535,7 +542,7 @@ async function getProductImpact(store, { windowDays = 7, limit = 20 } = {}) {
         intents: intentCounts?.after ?? 0,
         revenue: afterRevenue,
         traffic: afterSessions?.[titleKey]?.traffic ?? null,
-        orders: afterSales?.[titleKey]?.orders ?? 0,
+        orders: afterOrderCount,
       },
       growth,
       action: "View Product",

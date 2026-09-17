@@ -41,8 +41,8 @@ const storeSchema = new mongoose.Schema(
     },
     plan: {
       type: String,
-      enum: ["starter", "custom", "growth", "pro", "agency"],
-      default: "starter",
+      enum: [null, "starter", "custom", "growth", "pro", "agency"],
+      default: null,
     },
     planExpiresAt: {
       type: Date,
@@ -186,9 +186,7 @@ storeSchema.methods.getRefreshToken = function () {
 // Check plan features (includes paid add-ons)
 storeSchema.methods.hasFeature = function (feature) {
   if (this.isTrialActive()) {
-    return ["analyze", "aiReadinessScore", "competitorBenchmark"].includes(
-      feature,
-    )
+    return true
   }
   return planHasFeature(this.plan, feature, this.addons || {})
 }

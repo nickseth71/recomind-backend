@@ -36,6 +36,7 @@ router.post("/:id/analyse", aiLimiter, singleAnalyseGuard, ctrl.analyseProduct)
 router.get("/:id/analysis", ctrl.getAnalyses)
 router.get("/:id/competitors", ctrl.getCompetitorBenchmark)
 router.post("/:id/competitors", ctrl.runManualCompetitorBenchmark)
+router.post("/:id/optimise", ctrl.optimiseProduct)
 router.post("/:id/rollback", ctrl.rollbackProduct)
 router.delete("/:id/sync", ctrl.removeFromSync)
 

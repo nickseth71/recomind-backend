@@ -205,5 +205,17 @@ export async function publishLlmFiles(store, llmFiles) {
   llmFiles.publishedAt = new Date()
   llmFiles.publishedThemeId = result.themeId
   await llmFiles.save()
+
+  await ProductAnalysis.updateMany(
+    { storeId: store._id, score: { $ne: null } },
+    {
+      $set: {
+        appliedToShopify: true,
+        appliedAt: llmFiles.publishedAt,
+        appliedBy: "user",
+      },
+    },
+  )
+
   return result
 }

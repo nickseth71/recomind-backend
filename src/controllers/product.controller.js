@@ -2956,11 +2956,7 @@ import {
 } from "../jobs/analysisqueue.js"
 import * as productSyncService from "../services/productsync.service.js"
 import * as promptWinService from "../services/promptwin.service.js"
-import {
-  getPlanConfig,
-  getPromptLimits,
-  planHasFeature,
-} from "../config/plans.js"
+import { getPlanConfig, getPromptLimits } from "../config/plans.js"
 import { countActiveSyncedProducts } from "../middleware/plan-limits.js"
 import * as shopifyService from "../services/shopify.service.js"
 import * as impactService from "../services/impact.service.js"
@@ -3471,6 +3467,25 @@ async function optimiseProduct(req, res, next) {
       })
     }
 
+    const normalizeContent = (value) =>
+      String(value || "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/&nbsp;/gi, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+    const hasNewChanges =
+      normalizeContent(analysis.optimizedTitle || product.title) !==
+        normalizeContent(product.title) ||
+      normalizeContent(analysis.optimizedDescription || product.description) !==
+        normalizeContent(product.description)
+
+    if (!hasNewChanges) {
+      return res.status(409).json({
+        success: false,
+        error: "There are no new AI changes to publish for this product.",
+      })
+    }
+
     // Snapshot Shopify baseline metrics before pushing optimization.
     // This is best-effort and must not prevent the product update from succeeding.
     try {
@@ -3710,13 +3725,7 @@ async function syncSelected(req, res, next) {
  */
 async function removeFromSync(req, res, next) {
   try {
-    if (
-      !planHasFeature(
-        req.store.plan,
-        "manageSyncedProducts",
-        req.store.addons || {},
-      )
-    ) {
+    if (!req.store.hasFeature("manageSyncedProducts")) {
       return res.status(403).json({
         success: false,
         error:
@@ -3875,6 +3884,7 @@ async function getDashboardStats(req, res, next) {
     const [
       total,
       optimised,
+      analysedCount,
       byScore,
       recentAnalysesRaw,
       engineCoverage,
@@ -3887,7 +3897,10 @@ async function getDashboardStats(req, res, next) {
       // 2. Optimised products
       Product.countDocuments({ storeId, isOptimized: true }),
 
-      // 3. Score buckets + average
+      // 3. Products with at least one completed analysis
+      Product.countDocuments({ storeId, analysisScore: { $ne: null } }),
+
+      // 4. Score buckets + average
       Product.aggregate([
         { $match: { storeId, analysisScore: { $ne: null } } },
         {
@@ -3916,7 +3929,7 @@ async function getDashboardStats(req, res, next) {
         },
       ]),
 
-      // 4. Recent analyses — now includes primaryBuyer and prioritizedFixes count
+      // 5. Recent analyses — now includes primaryBuyer and prioritizedFixes count
       //    so the table can show who the product is for and how many fixes exist
       ProductAnalysis.find({ storeId })
         .sort({ createdAt: -1 })
@@ -4104,9 +4117,15 @@ async function getDashboardStats(req, res, next) {
     const rawLimits = req.store.getPromptLimits()
     const plan = {
       name: req.store.plan,
-      config: { label: rawConfig.label, tagline: rawConfig.tagline },
+      isTrial: req.store.isTrialActive(),
+      trialEndsAt: req.store.trialEndsAt,
+      config: {
+        label: req.store.isTrialActive() ? "Trial" : rawConfig.label,
+        tagline: rawConfig.tagline,
+      },
       limits: {
         maxProductsAnalyzed: rawLimits.maxProductsAnalyzed,
+        analyzedProducts: analysedCount,
         promptsPerProduct: rawLimits.promptsPerProduct,
         scanFrequency: rawLimits.scanFrequency,
       },
@@ -4130,11 +4149,7 @@ async function getDashboardStats(req, res, next) {
         perplexity: Math.round(coverage.perplexity || 0),
         gemini: Math.round(coverage.gemini || 0),
         aiOverview: Math.round(coverage.aiOverview || 0),
-        ...(planHasFeature(
-          req.store.plan,
-          "claudeCoverage",
-          req.store.addons || {},
-        )
+        ...(req.store.hasFeature("claudeCoverage")
           ? {
               claude:
                 coverage.claude != null ? Math.round(coverage.claude) : null,

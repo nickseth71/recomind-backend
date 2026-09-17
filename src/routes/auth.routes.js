@@ -2,6 +2,7 @@ import express from "express"
 const router = express.Router()
 import {
   getMe,
+  getVisibilityScore,
   registerStore,
   getStoreToken,
   syncStoreToken,
@@ -17,6 +18,7 @@ router.post("/", registerStore)
 router.post("/sync-token", syncStoreToken)
 router.get("/plans", listPlans)
 router.get("/me", authenticate, getMe)
+router.get("/visibility-score", authenticate, getVisibilityScore)
 router.get("/billing", authenticate, getStoreBillingInfo)
 router.post("/billing/tokens", authenticate, purchaseTokens)
 router.post("/billing/plan", authenticate, purchasePlan)

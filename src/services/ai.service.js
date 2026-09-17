@@ -1095,9 +1095,12 @@ function buildEngineCoverageInstructions(enabledEngines) {
 
 async function analyseProduct(product, storeId) {
   const store = await Store.findById(storeId)
-  const limits = getPromptLimits(store.plan, store.addons || {})
+  const limits =
+    store.getPromptLimits?.() || getPromptLimits(store.plan, store.addons || {})
   const competitorCount = limits.competitorCount || 0
-  const enabledEngines = getEnabledEngines(store.plan, store.addons || {})
+  const enabledEngines = store.isTrialActive?.()
+    ? ["chatgpt", "perplexity", "gemini", "aiOverview", "claude"]
+    : getEnabledEngines(store.plan, store.addons || {})
 
   const marketContext = buildStoreMarketContext(store)
 
@@ -1315,7 +1318,9 @@ async function generateSmartPrompts(
   store = null,
 ) {
   const storeDoc = store || (await Store.findById(storeId))
-  const limits = getPromptLimits(storeDoc.plan, storeDoc.addons || {})
+  const limits =
+    storeDoc.getPromptLimits?.() ||
+    getPromptLimits(storeDoc.plan, storeDoc.addons || {})
   const promptLimit = autoGenerate
     ? limits.promptsPerProduct
     : limits.manualPromptsPerProduct
@@ -1324,7 +1329,9 @@ async function generateSmartPrompts(
     `[RecoMind] Smart prompt limit: ${promptLimit}, plan: ${storeDoc.plan}`,
   )
 
-  const enabledEngines = getEnabledEngines(storeDoc.plan, storeDoc.addons || {})
+  const enabledEngines = storeDoc.isTrialActive?.()
+    ? ["chatgpt", "perplexity", "gemini", "aiOverview", "claude"]
+    : getEnabledEngines(storeDoc.plan, storeDoc.addons || {})
   const engineDisplayNames = {
     chatgpt: "ChatGPT",
     perplexity: "Perplexity",

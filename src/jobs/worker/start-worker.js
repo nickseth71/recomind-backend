@@ -257,7 +257,7 @@
 // }
 
 import { Worker, QueueEvents } from "bullmq"
-import { getBullMQRedis } from "../../config/redis.js"
+import { getBullMQRedis, getRedis } from "../../config/redis.js"
 import logger from "../../config/logger.js"
 import * as aiService from "../../services/ai.service.js"
 import * as promptWinService from "../../services/promptwin.service.js"
@@ -406,7 +406,16 @@ async function processAnalysisJob(productId, storeId, job) {
     const faqAnalysis = normalizeFaqAnalysis(rawFaqAnalysis)
 
     const store = await Store.findById(storeId)
-    const planLimits = getPromptLimits(store.plan, store.addons || {})
+    const planLimits =
+      store.getPromptLimits?.() ||
+      getPromptLimits(store.plan, store.addons || {})
+    const previousAnalysis = await ProductAnalysis.findOne({
+      productId: product._id,
+      storeId,
+    })
+      .sort({ createdAt: -1 })
+      .select("appliedToShopify appliedAt appliedBy")
+      .lean()
     const competitorBenchmark = aiService.buildCompetitorBenchmark(
       planLimits.competitorCount,
       product,
@@ -462,6 +471,12 @@ async function processAnalysisJob(productId, storeId, job) {
       // Raw response for debugging
       rawAiResponse: result.rawAiResponse,
       marketContext: result.marketContext || null,
+
+      appliedToShopify: Boolean(product.isOptimized),
+      appliedAt: product.isOptimized ? previousAnalysis?.appliedAt : undefined,
+      appliedBy: product.isOptimized
+        ? previousAnalysis?.appliedBy || "user"
+        : undefined,
     })
 
     const existingLlmFiles = await LlmFiles.findOne({ storeId }).select(
@@ -540,6 +555,16 @@ async function processAnalysisJob(productId, storeId, job) {
         logger.warn(`Prompt generation skipped: ${err.message}`)
       }
     }
+
+    await getRedis()
+      .del(
+        `dashboard:${storeId}:30days`,
+        `dashboard:${storeId}:3months`,
+        `dashboard:${storeId}:6months`,
+      )
+      .catch((err) =>
+        logger.warn(`Dashboard cache clear failed: ${err.message}`),
+      )
 
     job.updateProgress(90)
 
