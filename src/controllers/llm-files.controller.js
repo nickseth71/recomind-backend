@@ -32,16 +32,6 @@ export async function publishGeneratedLlmFiles(req, res, next) {
       return res
         .status(400)
         .json({ success: false, error: "Generate AI discovery files first" })
-    if (
-      files.publishedAt &&
-      files.generatedAt &&
-      new Date(files.generatedAt) <= new Date(files.publishedAt)
-    ) {
-      return res.status(409).json({
-        success: false,
-        error: "No new AI Store Index changes are available to publish",
-      })
-    }
     const result = await publishLlmFiles(req.store, files)
     res.json({
       success: true,

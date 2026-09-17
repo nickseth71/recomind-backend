@@ -455,6 +455,26 @@ async function syncSingleProduct(storeId, shopifyProductId) {
   )
 }
 
+async function syncProductFromWebhook(storeId, raw) {
+  if (!raw?.id) throw new Error("Webhook product id is missing")
+
+  const product = await Product.findOne({
+    storeId,
+    shopifyProductId: String(raw.id),
+  }).lean()
+  const fields = mapProductFields(raw, [], {
+    collections: product?.collections || [],
+    reviews: product?.reviews || [],
+    metafields: product?.metafields || [],
+  })
+
+  return Product.findOneAndUpdate(
+    { storeId, shopifyProductId: String(raw.id) },
+    { storeId, shopifyProductId: String(raw.id), ...fields },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  )
+}
+
 /**
  * Sync exactly the products the merchant selected in the picker.
  * Does NOT touch the plan-limit check — that's enforced by
@@ -648,19 +668,19 @@ async function applyOptimisationToShopify(
 ) {
   const store = await Store.findById(storeId)
   if (!store) throw new Error("Store not found")
- 
+
   const product = await Product.findOne({
     storeId,
     shopifyProductId: String(shopifyProductId),
   })
- 
+
   // FAQs are intentionally NEVER pushed to Shopify (not inlined into the
   // description, not written to a metafield) — they stay visible on the
   // RecoMind analysis/product-detail page only, which reads them straight
   // from MongoDB and is unaffected by this. Title, description content
   // (minus any FAQ block), and tags still apply exactly as before.
   const faqStrategy = "skip"
- 
+
   const updatePayload = {
     title: analysis.optimizedTitle,
     tags: [
@@ -671,16 +691,16 @@ async function applyOptimisationToShopify(
       includeFaqInDescription: false,
     }),
   }
- 
+
   const updatedProduct = await shopifyService.updateProduct(
     store.shopDomain,
     store.accessToken,
     shopifyProductId,
     updatePayload,
   )
- 
+
   await syncSingleProduct(storeId, shopifyProductId)
- 
+
   return {
     product: updatedProduct,
     faqStrategy,
@@ -691,6 +711,7 @@ async function applyOptimisationToShopify(
 export {
   syncAllProducts,
   syncSingleProduct,
+  syncProductFromWebhook,
   syncSelectedProducts,
   removeProductFromSync,
   applyOptimisationToShopify,

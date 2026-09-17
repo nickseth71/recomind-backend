@@ -65,7 +65,18 @@ async function handleProductUpdate(req, res) {
     const store = await Store.findOne({ shopDomain: req.shopDomain })
     if (!store) return
     const data = req.webhookBody
-    await productSyncService.syncSingleProduct(store._id, data.id)
+    try {
+      await productSyncService.syncSingleProduct(store._id, data.id)
+    } catch (err) {
+      if (err.response?.status === 401 || err.statusCode === 401) {
+        await productSyncService.syncProductFromWebhook(store._id, data)
+        logger.warn(
+          `Product update webhook used payload fallback after Shopify authorization failure: ${data.id}`,
+        )
+      } else {
+        throw err
+      }
+    }
     logger.info(`Product updated webhook processed: ${data.id}`)
   } catch (err) {
     logger.error("Webhook products/update error:", err.message)
