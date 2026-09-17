@@ -19,10 +19,10 @@ function verifyShopifyWebhook(req, res, next) {
   // Use rawBody (Buffer) for HMAC verification - must be the original bytes
   const rawBody =
     typeof req.body === "string"
-      ? req.body
+      ? Buffer.from(req.body)
       : Buffer.isBuffer(req.body)
-        ? req.body.toString()
-        : JSON.stringify(req.body)
+        ? req.body
+        : Buffer.from(JSON.stringify(req.body))
 
   if (!shopifyService.verifyWebhookHmac(rawBody, hmac)) {
     logger.warn(`Webhook HMAC failed from ${shop}`)
@@ -95,6 +95,9 @@ async function handleAppUninstalled(req, res) {
 
     // Remove the Shopify app session record(s) stored by Prisma session storage.
     await mongoose.connection.collection("Session").deleteMany({ shop })
+    await mongoose.connection.collection("Jwt").deleteMany({
+      recomind_shop: shop,
+    })
 
     await Store.findOneAndUpdate(
       { shopDomain: shop },

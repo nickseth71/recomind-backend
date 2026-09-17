@@ -271,7 +271,6 @@ import crypto from "crypto"
 import { getPromptLimits } from "../../config/plans.js"
 import startMetricsSync from "../metrics-sync.js"
 import { generateLlmFiles } from "../../services/llm-files.service.js"
-import LlmFiles from "../../models/llm-files.model.js"
 
 const QUEUE_NAME = "recomind-ai-jobs"
 const CONCURRENCY = parseInt(process.env.QUEUE_CONCURRENCY) || 3
