@@ -9,6 +9,7 @@ import {
   listPlans,
   getStoreBillingInfo,
   purchaseTokens,
+  purchasePlan,
 } from "../controllers/auth.controller.js"
 import { authenticate, validateShop } from "../middleware/auth.js"
 
@@ -18,6 +19,7 @@ router.get("/plans", listPlans)
 router.get("/me", authenticate, getMe)
 router.get("/billing", authenticate, getStoreBillingInfo)
 router.post("/billing/tokens", authenticate, purchaseTokens)
+router.post("/billing/plan", authenticate, purchasePlan)
 router.patch("/me/settings", authenticate, updateStoreSettings)
 router.get("/token", validateShop, getStoreToken)
 

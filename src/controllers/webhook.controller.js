@@ -132,21 +132,63 @@ async function handleSubscriptionUpdate(req, res) {
   res.sendStatus(200)
   const subscription = req.webhookBody
   const store = await Store.findOne({ shopDomain: req.shopDomain })
-  if (!store || subscription.status !== "ACTIVE") return
+  if (!store || !subscription) return
   const match = String(subscription.name || "").match(
     /([\d,]+) monthly tokens/i,
   )
   const amount = match ? Number(match[1].replace(/,/g, "")) : 0
+  if (!amount) {
+    store.billingStatus = subscription.status
+    if (subscription.name) {
+      const plan = String(subscription.name).match(
+        /RecoMind\s+(Starter|Growth|Pro)/i,
+      )
+      if (plan && subscription.status === "ACTIVE") {
+        store.activatePlan(
+          plan[1].toLowerCase(),
+          subscription.current_period_end || subscription.billing_on,
+        )
+        store.pendingPlan = null
+        store.billingConfirmationUrl = null
+      }
+    }
+    await store.save()
+    return
+  }
   if (
-    !amount ||
     store.billingSubscriptionId !==
-      (subscription.admin_graphql_api_id || store.billingSubscriptionId)
+    (subscription.admin_graphql_api_id || store.billingSubscriptionId)
   )
     return
   const reference = `subscription:${subscription.admin_graphql_api_id}:${subscription.updated_at || subscription.created_at || "active"}`
   if (store.lastTokenPurchaseReference === reference) return
   await store.addPurchasedTokens(amount, reference)
   store.billingStatus = "ACTIVE"
+  await store.save()
+}
+
+async function handleOneTimePurchaseUpdate(req, res) {
+  res.sendStatus(200)
+  const purchase = req.webhookBody
+  if (!purchase || purchase.status !== "ACTIVE") return
+  const store = await Store.findOne({ shopDomain: req.shopDomain })
+  if (!store) return
+  const purchaseId = purchase.admin_graphql_api_id || purchase.id
+  if (
+    store.pendingTokenPurchaseId &&
+    store.pendingTokenPurchaseId !== purchaseId
+  )
+    return
+  const match = String(purchase.name || "").match(/([\d,]+) token pack/i)
+  const amount = match
+    ? Number(match[1].replace(/,/g, ""))
+    : store.pendingTokenPurchaseAmount
+  if (!amount) return
+  const reference = `one-time:${purchaseId}:${purchase.updated_at || purchase.created_at || "active"}`
+  if (store.lastTokenPurchaseReference === reference) return
+  await store.addPurchasedTokens(amount, reference)
+  store.pendingTokenPurchaseId = null
+  store.pendingTokenPurchaseAmount = 0
   await store.save()
 }
 
@@ -158,4 +200,5 @@ export {
   handleAppUninstalled,
   handleMarketsUpdate,
   handleSubscriptionUpdate,
+  handleOneTimePurchaseUpdate,
 }

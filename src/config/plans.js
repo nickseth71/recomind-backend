@@ -114,6 +114,15 @@ const TOKEN_COSTS = {
   promptScoring: 25,
 }
 
+const TRIAL_LIMITS = {
+  monthlyTokenQuota: 1000,
+  maxProductsAnalyzed: 3,
+  maxProductsReAnalyze: 0,
+  promptsPerProduct: 1,
+  manualPromptsPerProduct: 3,
+  competitorCount: 1,
+}
+
 /** Map legacy plan ids to current config */
 function normalizePlan(plan) {
   if (["growth", "pro", "agency"].includes(plan)) return "starter"
@@ -152,6 +161,11 @@ function getEnabledEngines(plan, storeAddons = {}) {
 
 function getTokenQuotaForPlan(plan) {
   return getPlanConfig(plan).monthlyTokenQuota
+}
+
+function getTrialLimits(plan) {
+  const limits = getPromptLimits(plan)
+  return { ...limits, ...TRIAL_LIMITS }
 }
 
 function getPromptLimits(plan, storeAddons = {}) {
@@ -219,11 +233,13 @@ export {
   PLAN_CONFIG,
   ADDONS,
   TOKEN_COSTS,
+  TRIAL_LIMITS,
   normalizePlan,
   getPlanConfig,
   planHasFeature,
   getEnabledEngines,
   getTokenQuotaForPlan,
+  getTrialLimits,
   getPromptLimits,
   getAllPlans,
   getAllAddons,

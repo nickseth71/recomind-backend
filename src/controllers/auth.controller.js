@@ -410,6 +410,52 @@ import { getPlanConfig, getAllPlans, getAllAddons } from "../config/plans.js"
 import { signToken } from "../middleware/auth.js"
 import logger from "../config/logger.js"
 
+async function createPlanSubscription(store, planId, trialDays = 0) {
+  const plan = getPlanConfig(planId)
+  if (!plan.priceMonthly) throw new Error("This plan requires a sales contact")
+
+  const data = await shopifyService.graphqlQuery(
+    store.shopDomain,
+    store.getAccessToken(),
+    `mutation CreatePlanSubscription($name: String!, $returnUrl: URL!, $lineItems: [AppSubscriptionLineItemInput!]!, $trialDays: Int!) {
+      appSubscriptionCreate(name: $name, returnUrl: $returnUrl, lineItems: $lineItems, trialDays: $trialDays) {
+        confirmationUrl userErrors { field message } appSubscription { id status }
+      }
+    }`,
+    {
+      name: `RecoMind ${plan.label}`,
+      returnUrl:
+        process.env.SHOPIFY_APP_URL || "https://recomindai.onrender.com",
+      trialDays: Math.max(0, Math.min(7, Number(trialDays) || 0)),
+      lineItems: [
+        {
+          plan: {
+            appRecurringPricingDetails: {
+              price: {
+                amount: plan.priceMonthly.toFixed(2),
+                currencyCode: "USD",
+              },
+              interval: "EVERY_30_DAYS",
+            },
+          },
+        },
+      ],
+    },
+  )
+  const result = data?.appSubscriptionCreate
+  if (result?.userErrors?.length) {
+    throw new Error(result.userErrors.map((error) => error.message).join(", "))
+  }
+  if (result?.appSubscription?.id) {
+    store.billingSubscriptionId = result.appSubscription.id
+    store.billingStatus = result.appSubscription.status
+  }
+  store.pendingPlan = planId
+  store.billingConfirmationUrl = result?.confirmationUrl || null
+  await store.save()
+  return result
+}
+
 /**
  * POST /api/stores
  *
@@ -499,6 +545,18 @@ async function registerStore(req, res, next) {
     await store.save()
     logger.info(`Store ${isNew ? "created" : "updated"}: ${shop}`)
 
+    let billingConfirmationUrl = store.billingConfirmationUrl
+    if (isNew && !store.billingSubscriptionId) {
+      try {
+        const subscription = await createPlanSubscription(store, "starter", 7)
+        billingConfirmationUrl = subscription?.confirmationUrl || null
+      } catch (billingError) {
+        logger.warn(
+          `Could not create trial subscription for ${shop}: ${billingError.message}`,
+        )
+      }
+    }
+
     // Register webhooks using the stored access token to avoid any
     // mismatch between the token we just saved and the one received in
     // the request body (helps when tokens are rotated or persistence
@@ -556,7 +614,9 @@ async function registerStore(req, res, next) {
         shopDomain: store.shopDomain,
         shopName: store.shopName,
         plan: store.plan,
+        billingConfirmationUrl,
       },
+      billingConfirmationUrl,
     })
   } catch (err) {
     next(err)
@@ -572,7 +632,7 @@ async function getMe(req, res) {
   const store = req.store
 
   // Reset monthly quota if needed
-  store.resetMonthlyQuotaIfNeeded()
+  if (store.resetMonthlyQuotaIfNeeded()) await store.save()
 
   const limits = store.getPromptLimits()
   const activeSyncedProducts = await countActiveSyncedProducts(store._id)
@@ -767,7 +827,7 @@ async function listPlans(req, res) {
 async function getStoreBillingInfo(req, res, next) {
   try {
     const store = req.store
-    store.resetMonthlyQuotaIfNeeded()
+    if (store.resetMonthlyQuotaIfNeeded()) await store.save()
 
     const storeId = store._id
 
@@ -817,6 +877,12 @@ async function getStoreBillingInfo(req, res, next) {
           expiresAt: nextBillingDate,
           daysUntilExpiry: daysUntilExpiry,
           isExpired: daysUntilExpiry !== null && daysUntilExpiry < 0,
+          trialStartedAt: store.trialStartedAt,
+          trialEndsAt: store.trialEndsAt,
+          isTrial: store.isTrialActive(),
+          billingStatus: store.billingStatus,
+          confirmationUrl: store.billingConfirmationUrl,
+          pendingPlan: store.pendingPlan,
         },
 
         // ─── Token Quota ─────────────────────────────────────────────
@@ -878,6 +944,7 @@ async function getStoreBillingInfo(req, res, next) {
           installedAt: store.installedAt,
           isActive: store.isActive,
         },
+        billingConfirmationUrl: store.billingConfirmationUrl,
       },
     })
   } catch (err) {
@@ -894,54 +961,67 @@ async function purchaseTokens(req, res, next) {
       amount > 100000 ||
       amount % 1000
     ) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          error: "Token amount must be 1,000 to 100,000 in 1,000-token steps",
-        })
+      return res.status(400).json({
+        success: false,
+        error: "Token amount must be 1,000 to 100,000 in 1,000-token steps",
+      })
     }
     const price = (amount / 1000) * 10
     const data = await shopifyService.graphqlQuery(
       req.store.shopDomain,
       req.store.getAccessToken(),
-      `mutation CreateTokenSubscription($name: String!, $returnUrl: URL!, $lineItems: [AppSubscriptionLineItemInput!]!) {
-        appSubscriptionCreate(name: $name, returnUrl: $returnUrl, lineItems: $lineItems, trialDays: 0) {
-          confirmationUrl userErrors { field message } appSubscription { id status }
+      `mutation CreateTokenPurchase($name: String!, $returnUrl: URL!, $price: MoneyInput!) {
+        appPurchaseOneTimeCreate(name: $name, returnUrl: $returnUrl, price: $price) {
+          confirmationUrl userErrors { field message } appPurchaseOneTime { id status name
+          }
         }
       }`,
       {
-        name: `RecoMind ${amount.toLocaleString()} monthly tokens`,
+        name: `RecoMind ${amount.toLocaleString()} token pack`,
         returnUrl:
           process.env.SHOPIFY_APP_URL || "https://recomindai.onrender.com",
-        lineItems: [
-          {
-            plan: {
-              appRecurringPricingDetails: {
-                price: { amount: price.toFixed(2), currencyCode: "USD" },
-                interval: "EVERY_30_DAYS",
-              },
-            },
-          },
-        ],
+        price: { amount: price.toFixed(2), currencyCode: "USD" },
       },
     )
-    const result = data?.appSubscriptionCreate
+    const result = data?.appPurchaseOneTimeCreate
     if (result?.userErrors?.length)
-      return res
-        .status(400)
-        .json({
-          success: false,
-          error: result.userErrors.map((e) => e.message).join(", "),
-        })
-    if (result?.appSubscription?.id) {
-      req.store.billingSubscriptionId = result.appSubscription.id
-      req.store.billingStatus = result.appSubscription.status
+      return res.status(400).json({
+        success: false,
+        error: result.userErrors.map((e) => e.message).join(", "),
+      })
+    if (result?.appPurchaseOneTime?.id) {
+      req.store.pendingTokenPurchaseId = result.appPurchaseOneTime.id
+      req.store.pendingTokenPurchaseAmount = amount
       await req.store.save()
     }
     res.json({
       success: true,
       data: { amount, price, confirmationUrl: result?.confirmationUrl || null },
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+async function purchasePlan(req, res, next) {
+  try {
+    const planId = String(req.body?.plan || "").toLowerCase()
+    if (
+      getPlanConfig(planId).id !== planId ||
+      !getPlanConfig(planId).priceMonthly
+    ) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Invalid paid plan" })
+    }
+    const trialDays = req.store.isTrialActive()
+      ? Math.ceil((new Date(req.store.trialEndsAt) - Date.now()) / 86400000)
+      : 0
+    const result = await createPlanSubscription(req.store, planId, trialDays)
+    await req.store.save()
+    res.json({
+      success: true,
+      data: { plan: planId, confirmationUrl: result?.confirmationUrl || null },
     })
   } catch (error) {
     next(error)
@@ -957,4 +1037,5 @@ export {
   listPlans,
   getStoreBillingInfo,
   purchaseTokens,
+  purchasePlan,
 }

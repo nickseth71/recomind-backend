@@ -11,5 +11,6 @@ router.post("/products-delete", ctrl.handleProductDelete)
 router.post("/app-uninstalled", ctrl.handleAppUninstalled)
 router.post("/markets-update", ctrl.handleMarketsUpdate)
 router.post("/app-subscriptions-update", ctrl.handleSubscriptionUpdate)
+router.post("/app-purchases-one-time-update", ctrl.handleOneTimePurchaseUpdate)
 
 export default router

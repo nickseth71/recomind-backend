@@ -52,6 +52,10 @@ const storeSchema = new mongoose.Schema(
     trialEndsAt: { type: Date, default: null },
     billingSubscriptionId: { type: String, default: null },
     billingStatus: { type: String, default: "trialing" },
+    pendingPlan: { type: String, default: null },
+    billingConfirmationUrl: { type: String, default: null },
+    pendingTokenPurchaseId: { type: String, default: null },
+    pendingTokenPurchaseAmount: { type: Number, default: 0 },
     addons: {
       promptTracking: { type: Boolean, default: false },
       aiVisibilityAudit: { type: Boolean, default: false },
@@ -60,6 +64,8 @@ const storeSchema = new mongoose.Schema(
     // Token usage tracking (resets monthly)
     monthlyTokenQuota: { type: Number, default: 0 }, // Max tokens per month for this plan
     tokensUsedThisMonth: { type: Number, default: 0 }, // Tokens used in current month
+    // Purchased token balance is carried across plan renewals and plan
+    // changes. It is intentionally separate from the monthly plan allowance.
     purchasedTokensThisMonth: { type: Number, default: 0 },
     purchasedTokensAddedThisMonth: { type: Number, default: 0 },
     lastTokenPurchaseReference: { type: String, default: null },
@@ -179,16 +185,40 @@ storeSchema.methods.getRefreshToken = function () {
 
 // Check plan features (includes paid add-ons)
 storeSchema.methods.hasFeature = function (feature) {
+  if (this.isTrialActive()) {
+    return ["analyze", "aiReadinessScore", "competitorBenchmark"].includes(
+      feature,
+    )
+  }
   return planHasFeature(this.plan, feature, this.addons || {})
+}
+
+storeSchema.methods.isTrialActive = function () {
+  return Boolean(
+    this.trialEndsAt &&
+    new Date(this.trialEndsAt) > new Date() &&
+    ["trialing", "PENDING", "PENDING_APPROVAL"].includes(this.billingStatus),
+  )
 }
 
 // Get token quota for this plan
 storeSchema.methods.getTokenQuotaForPlan = function () {
+  if (this.isTrialActive()) return 1000
   return getTokenQuotaForPlan(this.plan)
 }
 
 // Get prompt win dashboard limits for this plan
 storeSchema.methods.getPromptLimits = function () {
+  if (this.isTrialActive()) {
+    return {
+      ...getPromptLimits(this.plan, this.addons || {}),
+      maxProductsAnalyzed: 3,
+      maxProductsReAnalyze: 0,
+      promptsPerProduct: 1,
+      manualPromptsPerProduct: 3,
+      competitorCount: 1,
+    }
+  }
   return getPromptLimits(this.plan, this.addons || {})
 }
 
@@ -200,13 +230,36 @@ storeSchema.methods.resetMonthlyQuotaIfNeeded = function () {
 
   if (daysSinceReset >= 30) {
     this.tokensUsedThisMonth = 0
-    this.purchasedTokensThisMonth = 0
     this.purchasedTokensAddedThisMonth = 0
     this.tokenQuotaResetDate = now
     this.monthlyTokenQuota = this.getTokenQuotaForPlan()
     return true
   }
   return false
+}
+
+// Apply a newly active subscription without carrying over unused monthly
+// allowance. Purchased tokens remain available because they are a separate
+// balance and are not reset here.
+storeSchema.methods.activatePlan = function (plan, periodEndsAt = null) {
+  const nextPeriodEndsAt = periodEndsAt ? new Date(periodEndsAt) : null
+  const expectedQuota = getTokenQuotaForPlan(plan)
+  const samePeriod =
+    this.plan === plan &&
+    this.billingStatus === "ACTIVE" &&
+    this.monthlyTokenQuota === expectedQuota &&
+    (!nextPeriodEndsAt ||
+      !this.planExpiresAt ||
+      this.planExpiresAt.getTime() === nextPeriodEndsAt.getTime())
+
+  if (samePeriod) return false
+
+  this.plan = plan
+  this.monthlyTokenQuota = expectedQuota
+  this.tokensUsedThisMonth = 0
+  this.tokenQuotaResetDate = new Date()
+  if (nextPeriodEndsAt) this.planExpiresAt = nextPeriodEndsAt
+  return true
 }
 
 // Check if store can use tokens

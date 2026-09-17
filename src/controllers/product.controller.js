@@ -3341,6 +3341,106 @@ async function getCompetitorBenchmark(req, res, next) {
   }
 }
 
+async function runManualCompetitorBenchmark(req, res, next) {
+  try {
+    const product = await Product.findOne({
+      _id: req.params.id,
+      storeId: req.store._id,
+    }).lean()
+    if (!product) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Product not found" })
+    }
+
+    const urls = Array.isArray(req.body?.urls)
+      ? [
+          ...new Set(
+            req.body.urls.map((url) => String(url).trim()).filter(Boolean),
+          ),
+        ]
+      : []
+    if (!urls.length || urls.length > 10) {
+      return res.status(400).json({
+        success: false,
+        error: "Provide between 1 and 10 competitor URLs",
+      })
+    }
+    const competitorLimit = req.store.getPromptLimits().competitorCount || 0
+    if (competitorLimit <= 0 || urls.length > competitorLimit) {
+      return res.status(403).json({
+        success: false,
+        error: `Your plan allows up to ${competitorLimit} competitor URL${competitorLimit === 1 ? "" : "s"} per product`,
+      })
+    }
+
+    let parsedUrls
+    try {
+      parsedUrls = urls.map((url) => new URL(url))
+    } catch {
+      return res.status(400).json({
+        success: false,
+        error: "Each competitor URL must be a valid absolute URL",
+      })
+    }
+    if (parsedUrls.some((url) => url.protocol !== "https:")) {
+      return res.status(400).json({
+        success: false,
+        error: "Competitor URLs must use HTTPS",
+      })
+    }
+
+    const latestAnalysis = await ProductAnalysis.findOne({
+      productId: product._id,
+    })
+      .sort({ createdAt: -1 })
+      .lean()
+    if (!latestAnalysis) {
+      return res.status(400).json({
+        success: false,
+        error: "Run product analysis before competitor analysis",
+      })
+    }
+
+    const names = parsedUrls.map(
+      (url) => url.hostname.replace(/^www\./i, "").split(".")[0],
+    )
+    const interpretation = {
+      ...(latestAnalysis.interpretation || {}),
+      competitiveContext: {
+        ...(latestAnalysis.interpretation?.competitiveContext || {}),
+        directCompetitors: names,
+        directCompetitorUrls: urls,
+      },
+    }
+    const benchmark = aiService.buildCompetitorBenchmark(
+      urls.length,
+      product,
+      interpretation,
+      latestAnalysis.score,
+    )
+    const analysis = await ProductAnalysis.findByIdAndUpdate(
+      latestAnalysis._id,
+      {
+        $set: {
+          competitorBenchmark: benchmark,
+          "interpretation.competitiveContext.directCompetitors": names,
+          "interpretation.competitiveContext.directCompetitorUrls": urls,
+        },
+      },
+      { new: true },
+    ).lean()
+
+    res.json({
+      success: true,
+      message: "Competitor analysis completed",
+      data: { competitorBenchmark: analysis.competitorBenchmark },
+    })
+  } catch (err) {
+    next(err)
+  }
+}
+
 /**
  * POST /api/products/:id/optimise
  * Apply the latest analysis to the Shopify product.
@@ -4066,6 +4166,7 @@ export {
   analyseBulk,
   getAnalyses,
   getCompetitorBenchmark,
+  runManualCompetitorBenchmark,
   optimiseProduct,
   rollbackProduct,
   syncProducts,

@@ -4,6 +4,7 @@ import logger from "../config/logger.js"
 import Store from "../models/store.model.js"
 import Product from "../models/product.model.js"
 import ProductAnalysis from "../models/product-analysis.mode.js"
+import LlmFiles from "../models/llm-files.model.js"
 import * as impactService from "../services/impact.service.js"
 
 const QUEUE_NAME = "recomind-metrics-sync"
@@ -33,9 +34,18 @@ export default async function startMetricsSync() {
           const store = await Store.findById(s._id)
           if (!store) continue
 
+          const files = await LlmFiles.findOne({
+            storeId: s._id,
+            publishedAt: { $ne: null },
+          })
+            .sort({ publishedAt: -1 })
+            .select("publishedAt")
+            .lean()
+          if (!files?.publishedAt) continue
+
           const products = await Product.find({
             storeId: s._id,
-            isOptimized: true,
+            analysisScore: { $ne: null },
           })
             .select("_id shopifyProductId title")
             .lean()
@@ -45,18 +55,17 @@ export default async function startMetricsSync() {
             try {
               const analysis = await ProductAnalysis.findOne({
                 productId: p._id,
-                appliedToShopify: true,
-                appliedAt: { $ne: null },
+                createdAt: { $lte: files.publishedAt },
               })
-                .sort({ appliedAt: -1 })
-                .select("appliedAt")
+                .sort({ createdAt: -1 })
+                .select("createdAt")
                 .lean()
-              if (!analysis?.appliedAt) continue
+              if (!analysis?.createdAt) continue
 
               await impactService.recordProductPostOptimization(
                 store,
                 p,
-                analysis.appliedAt,
+                files.publishedAt,
               )
             } catch (err) {
               logger.warn(

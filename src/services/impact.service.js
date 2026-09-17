@@ -1,6 +1,7 @@
 import Product from "../models/product.model.js"
 import ProductAnalysis from "../models/product-analysis.mode.js"
 import ProductPrompt from "../models/product-prompt.model.js"
+import LlmFiles from "../models/llm-files.model.js"
 import * as shopifyService from "./shopify.service.js"
 import logger from "../config/logger.js"
 
@@ -77,17 +78,16 @@ function getStoreCredentials(store) {
   return { shop: store.shopDomain, accessToken }
 }
 
-async function getOptimizationMilestone(storeId) {
-  const firstApplied = await ProductAnalysis.findOne({
+async function getPublicationMilestone(storeId) {
+  const files = await LlmFiles.findOne({
     storeId,
-    appliedToShopify: true,
-    appliedAt: { $ne: null },
+    publishedAt: { $ne: null },
   })
-    .sort({ appliedAt: 1 })
-    .select("appliedAt")
+    .sort({ publishedAt: 1 })
+    .select("publishedAt")
     .lean()
 
-  return firstApplied?.appliedAt || null
+  return files?.publishedAt || null
 }
 
 async function countIntentsWon(storeId, { beforeDate } = {}) {
@@ -242,7 +242,7 @@ function buildBeforeAfterComparison({ before, after, currency }) {
 }
 
 /**
- * Capture Shopify baseline metrics on a product right before optimization.
+ * Capture Shopify baseline metrics before analysis content is published.
  */
 async function captureProductBaseline(store, product) {
   const { shop, accessToken } = getStoreCredentials(store)
@@ -287,7 +287,7 @@ async function captureProductBaseline(store, product) {
 async function getImpactSummary(store, { windowDays = 7 } = {}) {
   const storeId = store._id
   const { shop, accessToken } = getStoreCredentials(store)
-  const milestone = await getOptimizationMilestone(storeId)
+  const milestone = await getPublicationMilestone(storeId)
   const days = Math.min(Math.max(parseInt(windowDays, 10) || 7, 1), 90)
 
   const [beforeIntents, afterIntents, intentsUnlocked] = await Promise.all([
@@ -326,7 +326,7 @@ async function getImpactSummary(store, { windowDays = 7 } = {}) {
           afterEnd,
         ),
       ])
-      periodLabel = `${days} days before vs ${days} days after first optimization`
+      periodLabel = `${days} days before vs ${days} days after first LLM file publication`
     } else {
       const comparison = await shopifyService.fetchStoreMetricsComparison(
         shop,
@@ -360,6 +360,9 @@ async function getImpactSummary(store, { windowDays = 7 } = {}) {
   }
 
   return {
+    hasPublishedFiles: Boolean(milestone),
+    publishedAt: milestone,
+    // Compatibility aliases for older dashboard clients.
     hasOptimizations: Boolean(milestone),
     optimizationStartedAt: milestone,
     periodLabel,
@@ -382,8 +385,16 @@ async function getProductImpact(store, { windowDays = 7, limit = 20 } = {}) {
   const { shop, accessToken } = getStoreCredentials(store)
   const days = Math.min(Math.max(parseInt(windowDays, 10) || 7, 1), 90)
   const maxItems = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100)
+  const publishedAt = await getPublicationMilestone(storeId)
 
-  const products = await Product.find({ storeId, isOptimized: true })
+  if (!publishedAt) {
+    return { products: [], windowDays: days, dataSource: "none" }
+  }
+
+  const products = await Product.find({
+    storeId,
+    analysisScore: { $ne: null },
+  })
     .sort({ updatedAt: -1 })
     .limit(maxItems)
     .lean()
@@ -393,21 +404,20 @@ async function getProductImpact(store, { windowDays = 7, limit = 20 } = {}) {
   for (const product of products) {
     const analysis = await ProductAnalysis.findOne({
       productId: product._id,
-      appliedToShopify: true,
-      appliedAt: { $ne: null },
+      createdAt: { $lte: publishedAt },
     })
-      .sort({ appliedAt: -1 })
-      .select("appliedAt")
+      .sort({ createdAt: -1 })
+      .select("createdAt")
       .lean()
 
-    const appliedAt = analysis?.appliedAt
-    if (!appliedAt) continue
+    if (!analysis?.createdAt) continue
+    const impactAt = publishedAt
 
-    const beforeStart = new Date(appliedAt)
+    const beforeStart = new Date(impactAt)
     beforeStart.setDate(beforeStart.getDate() - days)
-    const beforeEnd = new Date(appliedAt)
-    const afterStart = new Date(appliedAt)
-    const afterEnd = new Date(appliedAt)
+    const beforeEnd = new Date(impactAt)
+    const afterStart = new Date(impactAt)
+    const afterEnd = new Date(impactAt)
     afterEnd.setDate(afterEnd.getDate() + days)
     if (afterEnd > new Date()) afterEnd.setTime(Date.now())
 
@@ -468,7 +478,7 @@ async function getProductImpact(store, { windowDays = 7, limit = 20 } = {}) {
           afterStart,
           afterEnd,
         ),
-        getIntentCountsForProduct(product._id, appliedAt),
+        getIntentCountsForProduct(product._id, impactAt),
       ])
 
       const beforeSalesMap = beforeSales
@@ -513,11 +523,12 @@ async function getProductImpact(store, { windowDays = 7, limit = 20 } = {}) {
       productId: product._id,
       shopifyProductId: product.shopifyProductId,
       product: product.title,
-      optimizedAt: appliedAt,
+      publishedAt: impactAt,
+      optimizedAt: impactAt,
       before: {
         intents: intentCounts?.before ?? 0,
         revenue: beforeRevenue,
-        traffic: beforeSessions?.traffic ?? null,
+        traffic: beforeSessions?.[titleKey]?.traffic ?? null,
         orders: beforeSales?.[titleKey]?.orders ?? 0,
       },
       after: {
@@ -527,7 +538,7 @@ async function getProductImpact(store, { windowDays = 7, limit = 20 } = {}) {
         orders: afterSales?.[titleKey]?.orders ?? 0,
       },
       growth,
-      action: product.isOptimized ? "View Product" : "Apply Fix",
+      action: "View Product",
     })
   }
 
@@ -704,8 +715,14 @@ async function getTopOpportunities(store, { windowDays = 7, limit = 10 } = {}) {
   const { shop, accessToken } = getStoreCredentials(store)
   const days = Math.min(Math.max(parseInt(windowDays, 10) || 7, 1), 90)
   const maxItems = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 50)
+  const publishedAt = await getPublicationMilestone(storeId)
 
-  const optimizedProducts = await Product.find({ storeId, isOptimized: true })
+  if (!publishedAt) return { opportunities: [], windowDays: days }
+
+  const optimizedProducts = await Product.find({
+    storeId,
+    analysisScore: { $ne: null },
+  })
     .select("_id title shopifyProductId")
     .lean()
 
@@ -733,32 +750,57 @@ async function getTopOpportunities(store, { windowDays = 7, limit = 10 } = {}) {
   let shopifyDisabledForThisRequest = false
 
   async function getProductMetricsOnce(product, analysis) {
-    const cacheKey = `${product._id}:${analysis.appliedAt}`
+    const cacheKey = `${product._id}:${publishedAt}`
     if (metricsCache.has(cacheKey)) return metricsCache.get(cacheKey)
 
     if (shopifyDisabledForThisRequest) {
-      const empty = { beforeSessions: {}, afterSessions: {}, beforeSales: {}, afterSales: {} }
+      const empty = {
+        beforeSessions: {},
+        afterSessions: {},
+        beforeSales: {},
+        afterSales: {},
+      }
       metricsCache.set(cacheKey, empty)
       return empty
     }
 
-    const afterStart = new Date(analysis.appliedAt)
-    const afterEnd = new Date(analysis.appliedAt)
+    const afterStart = new Date(publishedAt)
+    const afterEnd = new Date(publishedAt)
     afterEnd.setDate(afterEnd.getDate() + days)
     if (afterEnd > new Date()) afterEnd.setTime(Date.now())
 
-    const beforeStart = new Date(analysis.appliedAt)
+    const beforeStart = new Date(publishedAt)
     beforeStart.setDate(beforeStart.getDate() - days)
-    const beforeEnd = new Date(analysis.appliedAt)
+    const beforeEnd = new Date(publishedAt)
 
     let result
     try {
       const [beforeSessions, afterSessions, beforeSales, afterSales] =
         await Promise.all([
-          shopifyService.fetchProductSessionMetrics(shop, accessToken, beforeStart, beforeEnd),
-          shopifyService.fetchProductSessionMetrics(shop, accessToken, afterStart, afterEnd),
-          shopifyService.fetchProductSalesMetrics(shop, accessToken, beforeStart, beforeEnd),
-          shopifyService.fetchProductSalesMetrics(shop, accessToken, afterStart, afterEnd),
+          shopifyService.fetchProductSessionMetrics(
+            shop,
+            accessToken,
+            beforeStart,
+            beforeEnd,
+          ),
+          shopifyService.fetchProductSessionMetrics(
+            shop,
+            accessToken,
+            afterStart,
+            afterEnd,
+          ),
+          shopifyService.fetchProductSalesMetrics(
+            shop,
+            accessToken,
+            beforeStart,
+            beforeEnd,
+          ),
+          shopifyService.fetchProductSalesMetrics(
+            shop,
+            accessToken,
+            afterStart,
+            afterEnd,
+          ),
         ])
       result = { beforeSessions, afterSessions, beforeSales, afterSales }
     } catch (err) {
@@ -768,7 +810,12 @@ async function getTopOpportunities(store, { windowDays = 7, limit = 10 } = {}) {
         err.message,
       )
       shopifyDisabledForThisRequest = true
-      result = { beforeSessions: {}, afterSessions: {}, beforeSales: {}, afterSales: {} }
+      result = {
+        beforeSessions: {},
+        afterSessions: {},
+        beforeSales: {},
+        afterSales: {},
+      }
     }
 
     metricsCache.set(cacheKey, result)
@@ -782,11 +829,10 @@ async function getTopOpportunities(store, { windowDays = 7, limit = 10 } = {}) {
     if (analysisCache.has(key)) return analysisCache.get(key)
     const analysis = await ProductAnalysis.findOne({
       productId,
-      appliedToShopify: true,
-      appliedAt: { $ne: null },
+      createdAt: { $lte: publishedAt },
     })
-      .sort({ appliedAt: -1 })
-      .select("appliedAt prioritizedFixes")
+      .sort({ createdAt: -1 })
+      .select("createdAt prioritizedFixes")
       .lean()
     analysisCache.set(key, analysis)
     return analysis
@@ -799,12 +845,12 @@ async function getTopOpportunities(store, { windowDays = 7, limit = 10 } = {}) {
     if (!product) continue
 
     const analysis = await getAnalysisOnce(product._id)
-    if (!analysis?.appliedAt) continue
+    if (!analysis?.createdAt) continue
 
     const wasHighBefore = (prompt.scoreHistory || []).some(
       (h) =>
         h.visibility === "HIGH" &&
-        new Date(h.scoredAt) <= new Date(analysis.appliedAt),
+        new Date(h.scoredAt) <= new Date(publishedAt),
     )
     if (wasHighBefore) continue
 
@@ -818,31 +864,42 @@ async function getTopOpportunities(store, { windowDays = 7, limit = 10 } = {}) {
     const afterRev = afterSales[titleKey]?.revenue ?? 0
 
     const trafficChange = pctChange(before.traffic, after.traffic)
-    const conversionChange = pctChange(before.conversionRate, after.conversionRate)
+    const conversionChange = pctChange(
+      before.conversionRate,
+      after.conversionRate,
+    )
     const revenueChange = pctChange(beforeRev, afterRev)
 
     const impactParts = []
-    if (trafficChange != null) impactParts.push(`Traffic: ${formatPct(trafficChange)}`)
-    if (conversionChange != null) impactParts.push(`Conversions: ${formatPct(conversionChange)}`)
-    if (revenueChange != null) impactParts.push(`Revenue: ${formatPct(revenueChange)}`)
+    if (trafficChange != null)
+      impactParts.push(`Traffic: ${formatPct(trafficChange)}`)
+    if (conversionChange != null)
+      impactParts.push(`Conversions: ${formatPct(conversionChange)}`)
+    if (revenueChange != null)
+      impactParts.push(`Revenue: ${formatPct(revenueChange)}`)
 
     const keyword = prompt.prompt || prompt.buyerIntent
     opportunities.push({
       keyword,
       productId: product._id,
       productTitle: product.title,
-      impact: impactParts[0] || "Intent matched after optimization",
+      impact: impactParts[0] || "Intent matched after publication",
       impact2: impactParts[1] || null,
       priority: "HIGH",
       metrics: { trafficChange, conversionChange, revenueChange },
-      detail: `Performance improved after optimization for "${keyword}". Products matching this buyer intent saw gains across traffic, add-to-cart, and order metrics in the ${days} days following the fix.`,
-      optimizedAt: analysis.appliedAt,
+      detail: `Performance after publication for "${keyword}" compared with the ${days} days before the AI discovery files were published.`,
+      publishedAt,
+      optimizedAt: publishedAt,
     })
   }
 
   opportunities.sort((a, b) => {
-    const scoreA = Math.abs(a.metrics.revenueChange || 0) + Math.abs(a.metrics.trafficChange || 0)
-    const scoreB = Math.abs(b.metrics.revenueChange || 0) + Math.abs(b.metrics.trafficChange || 0)
+    const scoreA =
+      Math.abs(a.metrics.revenueChange || 0) +
+      Math.abs(a.metrics.trafficChange || 0)
+    const scoreB =
+      Math.abs(b.metrics.revenueChange || 0) +
+      Math.abs(b.metrics.trafficChange || 0)
     return scoreB - scoreA
   })
 
